@@ -9,4 +9,19 @@ This library aims to be a more self-containt implementation, alowing the user to
 
 If you are using the library please cite: 
 
-TODO
+```bibtex
+@article{Bach2018,
+    author = {Bach, Eric and Szedmak, Sandor and Brouard, Céline and Böcker, Sebastian and Rousu, Juho},
+    title = "{Liquid-chromatography retention order prediction for metabolite identification}",
+    journal = {Bioinformatics},
+    volume = {34},
+    number = {17},
+    pages = {i875-i883},
+    year = {2018},
+    month = {09},
+    issn = {1367-4803},
+    doi = {10.1093/bioinformatics/bty590},
+    url = {https://doi.org/10.1093/bioinformatics/bty590},
+    eprint = {https://academic.oup.com/bioinformatics/article-pdf/34/17/i875/25702364/bty590.pdf},
+}
+```
