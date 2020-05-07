@@ -23,13 +23,11 @@
 # SOFTWARE.
 #
 ####
-from ranksvm.rank_svm_cls import KernelRankSVC
-
 import numpy as np
 import itertools as it
 import cvxpy as cp
 
-from sklearn.preprocessing import KernelCenterer, OneHotEncoder
+from sklearn.preprocessing import KernelCenterer
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.utils.validation import check_is_fitted
 
@@ -50,45 +48,6 @@ def frobenius_product(A, B=None):
         raise ValueError("A and B matrix must have the same shape")
 
     return np.sum(np.multiply(A, B))
-
-
-def mkl_combine_kernels(K_l, mkl_params):
-    """
-    Combine a list of kernel matrices.
-
-    :param K_l: list of array-like, List of kernel matrices to be combined.
-
-    :param mkl_params: list of dictionaries, containing the kernel weights and kernel centerer objects.
-        The centerer can be None, if no centering is needed.
-
-        Example:
-            [{"weight": scalar, "centerer": KernelCenterer}, ...]
-
-    :return: array-like, shape=(n_samples_A, n_samples_B), combined kernel matrix.
-    """
-    if len(mkl_params) != len(K_l):
-        raise ValueError("Number of MKL parameter must be equal the number of kernels.")
-
-    if len(K_l) == 0:
-        raise ValueError("Empty kernel list!")
-
-    # Combine kernels
-    K_out = np.zeros(K_l[0].shape)
-    for K, param in zip(K_l, mkl_params):
-        centerer = param.get("centerer", None)
-
-        if centerer is None:
-            K_c = K
-        else:
-            # Center the individual kernels before combination
-            assert (isinstance(centerer, KernelCenterer)), "Kernel centerer must be of class KernelCenterer"
-
-            # NOTE: Transpose here, because sklearn uses (test x train) but we use (train x test)
-            K_c = centerer.transform(K.T).T
-
-        K_out += (param["weight"] * K_c)
-
-    return K_out
 
 
 def kernel_alignment(K1, K2, centered=False):
@@ -147,6 +106,9 @@ class LinearMKLer(BaseEstimator, TransformerMixin):
         # Should the input kernels be centered before they are combined?
         self.center_before_combine = center_before_combine
 
+        self._kernel_weights = None  # stores the kernel weights
+        self._kernel_centerer = None
+
     def fit(self, Kx, Ky=None, **fit_params):
         """
         Learn the function MKL weights from training data.
@@ -196,9 +158,7 @@ class LinearMKLer(BaseEstimator, TransformerMixin):
             # Extract optimal weights and normalize
             self._kernel_weights = x.value / np.linalg.norm(x.value)
 
-            np.testing.assert_allclose(np.linalg.norm(self._kernel_weights),
-                                       1.0)  # For alignf the kernel weights must be normalized
-            # assert (np.linalg.norm(self._kernel_weights) == 1.0), "For alignf the kernel weights must be normalized."
+            np.allclose(np.linalg.norm(self._kernel_weights), 1.0)  # For alignf the kernel weights must be normalized
 
         # Fit kernel centerer
         if self.center_before_combine:
@@ -240,58 +200,3 @@ class LinearMKLer(BaseEstimator, TransformerMixin):
             K_out += (self._kernel_weights[k] * Kx_k)
 
         return K_out
-
-
-class SetTransformer(BaseEstimator, TransformerMixin):
-    def __init__(self):
-        self._X_train = None
-        self._y_train_ohc = None
-
-    def fit(self, X, y, **fit_params):
-        """
-        :param X: array-like, shape=(n_samples,), retention times
-        :param y: list of strings, shape=(n_samples,), molecular structures
-        """
-        self._X_train = X
-
-        # Encode molecular structures, e.g., InChI strings, using one-hot-encoding.
-        self._y_train_ohc = OneHotEncoder().fit_transform(y)
-
-        assert (self._y_train_ohc.shape[1] == self._X_train.shape[0])
-
-        return self
-
-    def transform(self, X, y=None):
-        raise NotImplementedError("Must be implemented in a derived class.")
-
-
-class UpperSetTransformer(SetTransformer):
-    def __init__(self):
-        super(UpperSetTransformer, self).__init__()
-
-    def transform(self, X, y=None):
-        Psi_X = np.zeros((X.shape[0], self._X_train.shape[0]))
-        for i, X_i in enumerate(X):
-            # Find training molecules eluting before:
-            elbf = (self._X_train < X_i)
-
-            # Take the union of that set as features
-            Psi_X[i] = np.sum(self._y_train_ohc[elbf], axis=0)
-
-        return Psi_X
-
-
-class LowerSetTransformer(SetTransformer):
-    def __init__(self):
-        super(LowerSetTransformer, self).__init__()
-
-    def transform(self, X, y=None):
-        Psi_X = np.zeros((X.shape[0], self._X_train.shape[0]))
-        for i, X_i in enumerate(X):
-            # Find training molecules eluting after:
-            elbf = (self._X_train > X_i)
-
-            # Take the union of that set as features
-            Psi_X[i] = np.sum(self._y_train_ohc[elbf], axis=0)
-
-        return Psi_X
