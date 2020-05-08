@@ -333,13 +333,6 @@ if __name__ == "__main__":
     times = timeit.repeat(lambda: _min_max_sparse_csr(fps_mat, fps_mat, n_jobs=4), number=1, repeat=3)
     print("min time:", np.min(times))
 
-    # Get kernel matrix from fingerprints without substructure learning
-    fps_mat = CircularFPFeaturizer(fp_mode="binary").transform(smis)
-    print("Is instance of 'csr_matrix': %d" % sp.isspmatrix_csr(fps_mat))
-    print(fps_mat.shape)
-    times = timeit.repeat(lambda: tanimoto_kernel(fps_mat, fps_mat), number=1, repeat=3)
-    print("min time:", np.min(times))
-
     # Now with substructure learning
     fps_mat = CircularFPFeaturizer(fp_mode="count", only_freq_subs=True, output_dense_matrix=True).fit_transform(smis)
     print("Is instance of 'csr_matrix': %d" % sp.isspmatrix_csr(fps_mat))
