@@ -28,9 +28,9 @@ import unittest
 import numpy as np
 import itertools as it
 
-from scipy.sparse import csc_matrix
+from scipy.sparse import csr_matrix
 
-from ranksvm.kernel_utils import minmax_kernel, tanimoto_kernel, check_input, generalized_tanimoto_kernel
+from kernel_utils import minmax_kernel, tanimoto_kernel, check_input, generalized_tanimoto_kernel
 
 
 class TestCheckInput(unittest.TestCase):
@@ -40,7 +40,7 @@ class TestCheckInput(unittest.TestCase):
         with self.assertRaises(ValueError):
             check_input(__X_A, None, datatype="binary")
         with self.assertRaises(ValueError):
-            check_input(csc_matrix(__X_A), None, datatype="binary")
+            check_input(csr_matrix(__X_A), None, datatype="binary")
 
     def test_datatype_checkup_postive(self):
         __X_A = np.array([[0, 1, 2], [1, 0, 0], [3, 4, -1]])
@@ -48,7 +48,7 @@ class TestCheckInput(unittest.TestCase):
         with self.assertRaises(ValueError):
             check_input(__X_A, None, datatype="positive")
         with self.assertRaises(ValueError):
-            check_input(csc_matrix(__X_A), None, datatype="positive")
+            check_input(csr_matrix(__X_A), None, datatype="positive")
 
 
 class TestMinMaxKernel(unittest.TestCase):
@@ -58,11 +58,22 @@ class TestMinMaxKernel(unittest.TestCase):
                 Y = X
 
             n_A, n_B = X.shape[0], Y.shape[0]
+            d = X.shape[1]
+            assert d == Y.shape[1]
 
             K = np.zeros((n_A, n_B))
 
-            for (i, j) in it.product(range(n_A), range(n_B)):
-                K[i, j] = np.sum(np.minimum(X[i], Y[j])) / np.sum(np.maximum(X[i], Y[j]))
+            for i in range(n_A):
+                for j in range(n_B):
+                    min_s = 0
+                    max_s = 0
+                    for s in range(d):
+                        min_s += np.minimum(X[i, s], Y[j, s])
+                        max_s += np.maximum(X[i, s], Y[j, s])
+                    K[i, j] = min_s / max_s
+
+            # for (i, j) in it.product(range(n_A), range(n_B)):
+            #     K[i, j] = np.sum(np.minimum(X[i], Y[j])) / np.sum(np.maximum(X[i], Y[j]))
 
             return K
 
@@ -111,8 +122,8 @@ class TestMinMaxKernel(unittest.TestCase):
     def test_corner_cases_with_sparse_matrix(self):
         # Empty features
         # ---------------------------------------------
-        __X_A = csc_matrix(np.array([[0, 1, 2, 0], [1, 0, 0, 0], [3, 4, 0, 0]]))
-        __X_B = csc_matrix(np.array([[0, 0, 1, 0], [3, 1, 0, 0]]))
+        __X_A = csr_matrix(np.array([[0, 1, 2, 0], [1, 0, 0, 0], [3, 4, 0, 0]]))
+        __X_B = csr_matrix(np.array([[0, 0, 1, 0], [3, 1, 0, 0]]))
 
         __K = minmax_kernel(__X_A, __X_B)
         np.testing.assert_equal(__K.shape, (3, 2))
@@ -171,8 +182,8 @@ class TestMinMaxKernel(unittest.TestCase):
 
     def test_compatibility_with_sparse_matrix(self):
         # ---------------------------------------------
-        __X_A = csc_matrix(np.array([[0, 1, 2], [1, 0, 0], [3, 4, 0]]))
-        __X_B = csc_matrix(np.array([[0, 0, 1], [3, 1, 0]]))
+        __X_A = csr_matrix(np.array([[0, 1, 2], [1, 0, 0], [3, 4, 0]]))
+        __X_B = csr_matrix(np.array([[0, 0, 1], [3, 1, 0]]))
 
         __K = minmax_kernel(__X_A)
         np.testing.assert_array_equal(np.diag(__K), np.ones((3,)))
@@ -203,14 +214,14 @@ class TestMinMaxKernel(unittest.TestCase):
         X_B = np.random.RandomState(842).randint(0, 43, size=(n_B, d))
 
         # Symmetric kernel
-        K = minmax_kernel(csc_matrix(X_A))
+        K = minmax_kernel(csr_matrix(X_A))
         np.testing.assert_array_equal(K, self._minmax_kernel_slow(X_A))
         np.testing.assert_array_equal(np.diag(K), np.ones((n_A,)))
         assert (np.max(K) <= 1.)
         assert (np.min(K) >= 0.)
 
         # Non-symmetric kernel
-        K = minmax_kernel(csc_matrix(X_A), csc_matrix(X_B))
+        K = minmax_kernel(csr_matrix(X_A), csr_matrix(X_B))
         np.testing.assert_array_equal(K, self._minmax_kernel_slow(X_A, X_B))
         assert (np.max(K) <= 1.)
         assert (np.min(K) >= 0.)
@@ -276,8 +287,8 @@ class TestTanimotoKernel(unittest.TestCase):
         np.testing.assert_equal(K[1, 1], jacscr(X_A[1], X_B[1]))
 
     def test_compatibility_with_sparse_matrix(self):
-        X_A = csc_matrix(np.array([[1, 1, 0], [0, 1, 1], [1, 0, 0]]))
-        X_B = csc_matrix(np.array([[1, 0, 1], [1, 1, 1], [0, 0, 0], [1, 1, 0]]))
+        X_A = csr_matrix(np.array([[1, 1, 0], [0, 1, 1], [1, 0, 0]]))
+        X_B = csr_matrix(np.array([[1, 0, 1], [1, 1, 1], [0, 0, 0], [1, 1, 0]]))
 
         # symmetric kernel
         K = tanimoto_kernel(X_A)
@@ -316,7 +327,7 @@ class TestTanimotoKernel(unittest.TestCase):
         X_B = np.random.RandomState(493).randint(0, 2, size=(12, 32))
 
         # symmetric kernel
-        K = tanimoto_kernel(csc_matrix(X_A))
+        K = tanimoto_kernel(csr_matrix(X_A))
         np.testing.assert_equal(K.shape, (51, 51))
         np.testing.assert_equal(K[3, 6], jacscr(X_A[3], X_A[6]))
         np.testing.assert_equal(K[1, 1], jacscr(X_A[1], X_A[1]))
@@ -328,7 +339,7 @@ class TestTanimotoKernel(unittest.TestCase):
         np.testing.assert_equal(np.diag(K), np.ones((51,)))
 
         # non-symmetric kernel
-        K = tanimoto_kernel(csc_matrix(X_A), csc_matrix(X_B))
+        K = tanimoto_kernel(csr_matrix(X_A), csr_matrix(X_B))
         np.testing.assert_equal(K.shape, (51, 12))
         np.testing.assert_equal(K[3, 6], jacscr(X_A[3], X_B[6]))
         np.testing.assert_equal(K[1, 1], jacscr(X_A[1], X_B[1]))
