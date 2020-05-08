@@ -29,6 +29,7 @@ import scipy.sparse as sp
 import itertools as it
 
 from sklearn.metrics.pairwise import manhattan_distances
+from joblib import delayed, Parallel
 
 """
 Kernel functions here are optimized to work on matrix inputs. 
@@ -93,7 +94,7 @@ def check_input(X, Y, datatype=None, shallow=False):
     return X, Y, is_sparse
 
 
-def minmax_kernel(X, Y=None, shallow_input_check=False):
+def minmax_kernel(X, Y=None, shallow_input_check=False, n_jobs=4):
     """
     Calculates the minmax kernel value for two sets of examples
     represented by their feature vectors.
@@ -102,6 +103,7 @@ def minmax_kernel(X, Y=None, shallow_input_check=False):
     :param Y: array-like, shape = (n_samples_B, n_features), examples B
     :param shallow_input_check: boolean, indicating whether checks regarding features values, e.g. >= 0, should be
         skipped.
+    :param n_jobs: scalar, number of jobs used for the kernel calculation from sparse input
 
     :return: array-like, shape = (n_samples_A, n_samples_B), kernel matrix
              with minmax kernel values:
@@ -113,7 +115,7 @@ def minmax_kernel(X, Y=None, shallow_input_check=False):
     X, Y, is_sparse = check_input(X, Y, datatype="positive", shallow=shallow_input_check)  # Handle for example Y = None
 
     if is_sparse:
-        K_mm = _min_max_sparse_csr(X, Y)
+        K_mm = _min_max_sparse_csr(X, Y, n_jobs=n_jobs)
     else:
         K_mm = _min_max_dense(X, Y)
 
@@ -143,11 +145,30 @@ def _min_max_dense(X, Y):
     return min_K / max_K
 
 
-def _min_max_sparse_csr(X, Y):
+@delayed
+def _min_max_sparse_csr_single_element(x_i, y_j, nonz_idc_x_i, nonz_idc_y_j):
+    min_k = 0
+    max_k = 0
+
+    # In the indices intersection we need to check min and max
+    for s in nonz_idc_x_i & nonz_idc_y_j:
+        max_k += np.maximum(x_i[0, s], y_j[0, s])
+        min_k += np.minimum(x_i[0, s], y_j[0, s])
+
+    # Indices that appear only in X[i]: minimum is zero, maximum comes from X[i]
+    for s in nonz_idc_x_i - nonz_idc_y_j:
+        max_k += x_i[0, s]
+
+    # Indices that appear only in Y[j]: minimum is zero, maximum comes from Y[j]
+    for s in nonz_idc_y_j - nonz_idc_x_i:
+        max_k += y_j[0, s]
+
+    return np.sum(min_k), np.sum(max_k)
+
+
+def _min_max_sparse_csr(X, Y, n_jobs=1):
     """
     MinMax-Kernel implementation for sparse feature vectors.
-
-    TODO: Implement a parallel version using joblib.
     """
     # Find the non-zero indices for each row and put them into set-objects
     n_x, n_y = X.shape[0], Y.shape[0]
@@ -160,24 +181,13 @@ def _min_max_sparse_csr(X, Y):
     for i in range(n_y):
         nonz_idc_y[i].update(Y.indices[Y.indptr[i]:Y.indptr[i + 1]])  # non-zero indices of matrix X in row
 
-    min_k = np.zeros((n_x, n_y))
-    max_k = np.zeros((n_x, n_y))
+    # Calculate kernel values
+    res = Parallel(n_jobs=n_jobs)(_min_max_sparse_csr_single_element(X[i], Y[j], nonz_idc_x[i], nonz_idc_y[j])
+                                  for i, j in it.product(range(n_x), range(n_y)))
 
-
-
-    for i, j in it.product(range(n_x), range(n_y)):
-        # In the indices intersection we need to check min and max
-        for s in nonz_idc_x[i] & nonz_idc_y[j]:
-            max_k[i, j] += np.maximum(X[i, s], Y[j, s])
-            min_k[i, j] += np.minimum(X[i, s], Y[j, s])
-
-        # Indices that appear only in X[i]: minimum is zero, maximum comes from X[i]
-        for s in nonz_idc_x[i] - nonz_idc_y[j]:
-            max_k[i, j] += X[i, s]
-
-        # Indices that appear only in Y[j]: minimum is zero, maximum comes from Y[j]
-        for s in nonz_idc_y[j] - nonz_idc_x[i]:
-            max_k[i, j] += Y[j, s]
+    min_k, max_k = zip(*res)
+    min_k = np.array(min_k).reshape((n_x, n_y))
+    max_k = np.array(max_k).reshape((n_x, n_y))
 
     return min_k / max_k
 
@@ -317,7 +327,7 @@ if __name__ == "__main__":
     fps_mat = CircularFPFeaturizer(fp_mode="count").transform(smis)
     print("Is instance of 'csr_matrix': %d" % sp.isspmatrix_csr(fps_mat))
     print(fps_mat.shape)
-    times = timeit.repeat(lambda: _min_max_sparse_csr(fps_mat, fps_mat), number=1, repeat=3)
+    times = timeit.repeat(lambda: _min_max_sparse_csr(fps_mat, fps_mat, n_jobs=4), number=1, repeat=3)
     print("min time:", np.min(times))
 
     # Now with substructure learning
