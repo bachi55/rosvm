@@ -36,7 +36,8 @@ from sklearn.utils.validation import check_random_state
 from time import process_time, sleep
 from collections import deque
 
-from ranksvm.kernel_utils import tanimoto_kernel, minmax_kernel
+from pair_utils_2 import get_pairs_multiple_datasets
+from kernel_utils import tanimoto_kernel, minmax_kernel
 
 
 warnings.simplefilter('ignore', sp_sparse.SparseEfficiencyWarning)
@@ -118,7 +119,8 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
     """
     def __init__(self, C=1.0, kernel="precomputed", tol=0.001, max_iter=1000, min_iter=5, t_0=0.1,
                  step_size_algorithm="diminishing", gamma=None, coef0=1, degree=3, kernel_params=None,
-                 convergence_criteria="max_alpha_change", verbose=False, debug=0, random_state=None):
+                 convergence_criteria="max_alpha_change", verbose=False, debug=0, random_state=None,
+                 pair_generation="eccb"):
 
         if convergence_criteria not in ["rel_dual_obj_change", "max_alpha_change",
                                         "rel_prim_dual_gap_change", "max_iter"]:
@@ -148,13 +150,25 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
         # Debug parameters
         self.verbose = verbose
         self.debug = debug
-        self.random_state = random_state  # used to split the examples into positive and negative class.
+        self.random_state = check_random_state(random_state)
         self.error_state = None
         self.k_convergence = None
         self.t_convergence = None
         self.obj_has_converged = False
 
         # Training data used for fitting
+        if pair_generation == "eccb":
+            self._pair_params = {"d_upper": 16, "d_lower": 1}
+            self._select_random_pairs = False
+        elif pair_generation == "all":
+            self._pair_params = {"d_upper": np.inf, "d_lower": 1}
+            self._select_random_pairs = False
+        elif pair_generation == "random":
+            self._pair_params = {"d_upper": np.inf, "d_lower": 1}
+            self._select_random_pairs = True
+        else:
+            raise ValueError("Invalid pair generation approach: %s. Choices are: 'eccb', 'all' and 'random'.")
+
         self._pairs_fit = None
         self._pairwise_labels_fit = None
         self._KX_fit = None
@@ -166,6 +180,43 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
         # Model parameters
         self._alpha = None
         self._idx_sv = None
+
+    def fit(self, X, y):
+        """
+        Estimating the parameters of the dual ranking svm with scaled margin.
+        The conditional gradient descent algorithm is used to find the optimal
+        alpha vector.
+
+        :param X: array-like, shape = (n_samples, n_features) or (n_samples, n_samples)
+            Object features or object similarities (kernel). If self.kernel == "precomputed"
+            then X is interpreted as symmetric kernel matrix, otherwise as feature matrix.
+            In this case the kernel is calculated on the fly.
+        :param y: list of tuples, length = n_samples, the targets values, e.g. retention times,
+            for all molecules measured with a set of datasets.
+
+            Example:
+            [..., (rts_i, ds_i), (rts_j, ds_j), (rts_k, ds_k), ...]
+
+            rts_i ... retention time of measurement i
+            ds_i ... identifier of the dataset of measurement i
+        """
+
+        # Generate training pairs
+        pairs, py, pdss = get_pairs_multiple_datasets(
+            y, d_lower=self._pair_params["d_lower"], d_upper=self._pair_params["d_upper"])
+
+        if self._select_random_pairs:
+            # TODO: Make the random sample percentage a parameter
+            _idc = self.random_state.choice(range(len(pairs)), size=self._get_p_perc(len(pairs), 5), replace=False)
+            pairs = [pairs[idx] for idx in _idc]
+            py = [py[idx] for idx in _idc]
+            pdss = [pdss[idx] for idx in _idc]
+
+        n_pairs = len(pairs)
+
+        # Build A matrix
+        n_samples = len(X)
+        self._A = self._build_A_matrix(pairs, py, len(X))
 
     def fit_old(self, X, pairs, pairwise_labels=None, pairwise_confidences=None, alpha_init=None):
         """
@@ -595,37 +646,52 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
     # Static methods
     # ---------------------------------
     @staticmethod
-    def _build_A_matrix(pairs, n_samples, y=None):
+    def _build_A_matrix(pairs, y, n_samples):
         """
         Construct a matrix A (p x l) so that:
-            A_{(i,j),:} = y_ij (0...0, -1, 0...0, 1, 0...0).
+
+            A_{(i, j), :} = y_ij * (0...0, 1, 0...0, -1, 0...0)       ROW IN MATRIX A
+                                           i          j
 
         This matrix is used to simplify the optimization using 'difference' features.
 
-        :param pairs: List of tuples (i,j) of length p containing the pairwise relations:
-            i elutes before j, ... --> [(i,j), (u,v), ...]
+        :param pairs: List of tuples, length = n_train_pairs (= p), containing the
+            training pair indices. Here, i and j correspond to the index in the training
+            feature or kernel matrix of the individual examples
 
-        :param n_samples: scalar, number of training examples
+        :param n_samples: scalar, number of training examples (= l)
 
-        :param y: array-like, shape = (p, 1). Label for each pairwise relation (optional):
-            Positive and negative class:
-                y =  1 (positive) : pair = (i,j) with i elutes before j
-                y = -1 (negative) : pair = (j,i) with i elutes before j
+        :param y: list, length = p. Label for each training example pair. The label is
+            defined as:
 
-            If y is None: it is assumed that all pairs belong to the positive class.
+                y_ij = sign(t_i - t_j)   for pair (i, j):
 
         :return: sparse array-like, shape = (p, l)
         """
         n_pairs = len(pairs)
 
-        row_ind = np.append(np.arange(0, n_pairs), np.arange(0, n_pairs))
+        row_ind = np.append(np.arange(n_pairs), np.arange(n_pairs))
         col_ind = np.append([pair[0] for pair in pairs], [pair[1] for pair in pairs])
-        data = np.append(-1 * np.ones((1, n_pairs)), np.ones((1, n_pairs)))
+        data = np.append(np.ones(n_pairs), -1 * np.ones(n_pairs))
 
-        if y is not None:
-            data = data * np.append(y, y)
+        # Apply labels to all rows
+        data = data * np.append(y, y)
 
         return sp_sparse.csr_matrix((data, (row_ind, col_ind)), shape=(n_pairs, n_samples))
+
+    @staticmethod
+    def _get_p_perc(n, p):
+        """
+        Return the number of samples corresponding to the specified percentage.
+
+        :param n: scalar, number of samples
+        :param p: scalar, percentage
+        :return: scalar, fraction of the samples corresponding to the specified percentage
+        """
+        if p < 0 or p > 100:
+            raise ValueError("Percentage must be from range [0, 100]")
+
+        return np.round((n * p) / 100)
 
     @staticmethod
     def _get_step_size_diminishing(k, C, t_0):
@@ -727,53 +793,3 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
             tp /= len(pairs)
 
         return tp
-
-
-# ---------------------------------
-# Deprecated code
-# ---------------------------------
-def get_pairwise_labels(pairs, balance_classes=True, random_state=None):
-    """
-    Task: Get the labels for each pairwise relation. By default the pairs are randomly distributed across
-          a positive and negative class:
-          y =  1 (positive) : pair = (i,j) with i elutes before j
-          y = -1 (negative) : pair = (j,i) with i elutes before j
-
-    :param pairs: list of index pairs considered for the pairwise features
-        [(i,j), ...] for which it holds: i elutes before j
-
-    :param balance_classes: binary indicating, whether 50% of the pairs should be
-        swapped and assigned a negative target value. This is use-full if a binary
-        SVM is training, default=True
-
-    :param random_state: int, RandomState instance or None, optional, default=None
-        If int, random_state is the seed used by the random number generator;
-        If RandomState instance, random_state is the random number generator;
-        If None, the random number generator is the RandomState instance used
-        by `np.random`.
-
-    :return: tuple (pairs_out, y_out):
-        pairs_out: List of pairwise relations of length k
-        y_out: array-like, shape=(n_pairs, 1), label vector
-    """
-    n_pairs = len(pairs)
-
-    y = np.ones((n_pairs, 1), dtype="int")  # pairwise labels
-
-    if balance_classes:
-        pairs_out = pairs.copy()
-
-        # Get a random generator
-        rng = check_random_state(random_state)
-
-        # Split the example into positive and negative class: 50/50
-        idc_n = rng.choice(np.arange(0, n_pairs), size=n_pairs // 2, replace=False)
-
-        # Swap label and pair for negative class
-        for idx_n in idc_n:
-            pairs_out[idx_n] = (pairs_out[idx_n][1], pairs_out[idx_n][0])
-            y[idx_n] = -y[idx_n]
-    else:
-        pairs_out = pairs
-
-    return pairs_out, y
