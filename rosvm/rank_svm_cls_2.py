@@ -44,6 +44,11 @@ warnings.simplefilter('ignore', sp_sparse.SparseEfficiencyWarning)
 warnings.simplefilter('always', UserWarning)
 
 
+class FeasibilityError(RuntimeError):
+    def __init__(self, msg):
+        super(FeasibilityError, self).__init__(msg)
+
+
 class KernelRankSVC (BaseEstimator, ClassifierMixin):
     """
     Implementation of the kernelized Ranking Support Vector Classifier.
@@ -120,7 +125,7 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
     def __init__(self, C=1.0, kernel="precomputed", tol=0.001, max_iter=1000, min_iter=5, t_0=0.1,
                  step_size_algorithm="diminishing", gamma=None, coef0=1, degree=3, kernel_params=None,
                  convergence_criteria="max_alpha_change", verbose=False, debug=0, random_state=None,
-                 pair_generation="eccb"):
+                 pair_generation="eccb", alpha_threshold=1e-4):
 
         if convergence_criteria not in ["rel_dual_obj_change", "max_alpha_change",
                                         "rel_prim_dual_gap_change", "max_iter"]:
@@ -146,6 +151,7 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
 
         # General Ranking SVM parameter
         self.C = C
+        self.alpha_threshold = alpha_threshold
 
         # Debug parameters
         self.verbose = verbose
@@ -169,17 +175,17 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
         else:
             raise ValueError("Invalid pair generation approach: %s. Choices are: 'eccb', 'all' and 'random'.")
 
-        self._pairs_fit = None
-        self._pairwise_labels_fit = None
-        self._KX_fit = None
-        self._X_fit = None
-        self._pairwise_confidences_fit = None
+        self._pairs_train = None
+        self._X_train = None
         self._A = None
         self._last_AKAt_y = None
+        self._KX_train = None
+        self._py_train = None
+        self._pdss_train = None
 
         # Model parameters
         self._alpha = None
-        self._idx_sv = None
+        self._is_sv = None
 
     def fit(self, X, y):
         """
@@ -191,6 +197,7 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
             Object features or object similarities (kernel). If self.kernel == "precomputed"
             then X is interpreted as symmetric kernel matrix, otherwise as feature matrix.
             In this case the kernel is calculated on the fly.
+
         :param y: list of tuples, length = n_samples, the targets values, e.g. retention times,
             for all molecules measured with a set of datasets.
 
@@ -200,23 +207,67 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
             rts_i ... retention time of measurement i
             ds_i ... identifier of the dataset of measurement i
         """
+        # Handle training data
+        if self.kernel == "precomputed":
+            if X.shape[0] != X.shape[1]:
+                raise ValueError("Precomputed kernel matrix must be squared: You provided KX.shape = (%d, %d)."
+                                 % (X.shape[0], X.shape[1]))
+            self._KX_train = X
+        else:
+            self._X_train = X
+            self._KX_train = self._get_kernel(self._X_train)
 
         # Generate training pairs
-        pairs, py, pdss = get_pairs_multiple_datasets(
+        self._pairs_train, self._py_train, self._pdss_train = get_pairs_multiple_datasets(
             y, d_lower=self._pair_params["d_lower"], d_upper=self._pair_params["d_upper"])
 
         if self._select_random_pairs:
             # TODO: Make the random sample percentage a parameter
-            _idc = self.random_state.choice(range(len(pairs)), size=self._get_p_perc(len(pairs), 5), replace=False)
-            pairs = [pairs[idx] for idx in _idc]
-            py = [py[idx] for idx in _idc]
-            pdss = [pdss[idx] for idx in _idc]
-
-        n_pairs = len(pairs)
+            _idc = self.random_state.choice(
+                range(len(self._pairs_train)), size=self._get_p_perc(len(self._pairs_train), 5), replace=False)
+            self._pairs_train = [self._pairs_train[idx] for idx in _idc]
+            self._py_train = [self._py_train[idx] for idx in _idc]
+            self._pdss_train = [self._pdss_train[idx] for idx in _idc]
 
         # Build A matrix
-        n_samples = len(X)
-        self._A = self._build_A_matrix(pairs, py, len(X))
+        # FIXME: This is specific to the difference features.
+        self._A = self._build_A_matrix(self._pairs_train, self._py_train, len(X))
+
+        # Initialize alpha: 1% set to C
+        self._alpha = np.zeros(len(self._pairs_train))
+        #_idc = self.random_state.choice(range(len(self._pairs_train)), self._get_p_perc(len(self._pairs_train), 1),
+        #                                replace=False)
+        #self._alpha[_idc] = self.C
+
+        k = 0
+        tau = 0.5
+        while k < self.max_iter:
+            s = self._solve_sub_problem(self._alpha)
+
+            # tau = self._get_step_size_diminishing_2(tau) if k > 0 else tau
+            tau = 2 / (k + 2)  # step-width
+
+            self._alpha = self._alpha + tau * (s - self._alpha)
+
+            self._assert_is_feasible(self._alpha)
+
+            k += 1
+
+        # Threshold dual variables to the boarder ranges, if there are very close to it.
+        self._alpha = self._bound_alpha(self._alpha, self.alpha_threshold, 0, self.C)
+        self._assert_is_feasible(self._alpha)
+
+        # Only store data related to the support vectors
+        self._is_sv = (self._alpha > 0)
+        self._A = self._A[self._is_sv]
+        self._alpha = self._alpha[self._is_sv]
+        self._pairs_train = [self._pairs_train[idx] for idx, is_sv in enumerate(self._is_sv) if is_sv]
+        self._py_train = [self._py_train[idx] for idx, is_sv in enumerate(self._is_sv) if is_sv]
+        self._pdss_train = [self._pdss_train[idx] for idx, is_sv in enumerate(self._is_sv) if is_sv]
+
+        print("n_support: %d (out of %d)" % (np.sum(self._is_sv), len(self._is_sv)))
+
+        return self
 
     def fit_old(self, X, pairs, pairwise_labels=None, pairwise_confidences=None, alpha_init=None):
         """
@@ -261,8 +312,8 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
 
         :return: pointer, to estimator it self
         """
-        self._pairs_fit = pairs
-        n_pairs = len(self._pairs_fit)
+        self._pairs_train = pairs
+        n_pairs = len(self._pairs_train)
 
         # Handle object representation
         if self.kernel == "precomputed":
@@ -270,10 +321,10 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
                 raise ValueError("Precomputed kernel matrix must be squared: KX.shape = (%d, %d)."
                                  % (X.shape[0], X.shape[1]))
 
-            self._KX_fit = X
+            self._KX_train = X
         else:
-            self._X_fit = X
-            self._KX_fit = self._get_kernel(self._X_fit)
+            self._X_train = X
+            self._KX_train = self._get_kernel(self._X_train)
 
         # Handle / initialize pairwise labels
         if pairwise_labels is not None:
@@ -308,7 +359,7 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
             else:
                 alpha_k = alpha_init
 
-            if not self._is_feasible(alpha_k):
+            if not self._assert_is_feasible(alpha_k):
                 ValueError("The provided initial alpha is not in the feasible set. "
                            "Check that 0 <= alpha_ij <= C for all (i,j) in P.")
 
@@ -316,7 +367,7 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
         if self.verbose:
             starttime = process_time()
 
-        self._A = self._build_A_matrix(pairs=self._pairs_fit, n_samples=self._KX_fit.shape[0],
+        self._A = self._build_A_matrix(pairs=self._pairs_train, n_samples=self._KX_train.shape[0],
                                        y=self._pairwise_labels_fit)
         k = 1  # first iteration
         t = self.t_0  # initial step-width used for 'diminishing_2'
@@ -349,7 +400,7 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
             alpha_k = alpha_k + t * alpha_delta
 
             # Check feasibility
-            if not self._is_feasible(alpha_k):
+            if not self._assert_is_feasible(alpha_k):
                 self.error_state = {"alpha_old": alpha_old, "alpha_new": alpha_k, "alpha_delta": alpha_delta, "t": t}
                 raise RuntimeError("Alpha is after update not in the feasible set anymore.")
 
@@ -406,6 +457,67 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
 
         return self
 
+    def predict(self, X):
+        """
+        Calculates the RankSVM preference score < w , phi_i > for a set of examples.
+
+        Note: < w , phi_i - phi_j > = < w , phi_i > - < w , phi_j >
+
+        :param X: array-like, data description
+            feature-vectors: shape = (n_samples_test, d)
+            -- or --
+            kernel-matrix: shape = (n_samples_test, n_samples_train),
+
+        :return: array-like, shape = (n_samples_test, ), mapped values for all examples.
+        """
+        if self.kernel == "precomputed":
+            if not X.shape[0] == self._KX_train.shape[0]:
+                raise ValueError("Test-train kernel must have as many columns as training examples.")
+        else:
+            X = self._get_kernel(X, self._X_train)  # shape = (n_test, n_train)
+
+        wtx = (X @ (self._alpha @ self._A)).flatten()  # shape = (n_test, )
+        assert wtx.shape == (len(X),)
+
+        return wtx
+
+    def score(self, X, y, sample_weight=None):
+        """
+        :param X: array-like, data description
+            feature-vectors: shape = (n_samples_test, d)
+            -- or --
+            kernel-matrix: shape = (n_samples_test, n_samples_train),
+
+        :param y: list of tuples, length = n_samples, the targets values, e.g. retention times,
+            for all molecules measured with a set of datasets.
+
+            Example:
+            [..., (rts_i, ds_i), (rts_j, ds_j), (rts_k, ds_k), ...]
+
+            rts_i ... retention time of measurement i
+            ds_i ... identifier of the dataset of measurement i
+
+        :param sample_weight: parameter currently not used.
+
+        :return: scalar, pairwise prediction accuracy separately calculated for all provided
+            datasets and subsequently averaged.
+        """
+        if sample_weight:
+            return NotImplementedError("Samples weights in the scoring are currently not supported.")
+
+        rts, dss = zip(*y)
+        rts = np.array(rts)
+        dss = np.array(dss)
+
+        dss_unq = set(dss)  # get unique datasets
+        score = 0.0
+        for ds in dss_unq:
+            # Calculate the score for each dataset individually
+            score += self.score_pointwise_using_predictions(self.predict(X[dss == ds]), rts[dss == ds])
+        score /= len(dss_unq)
+
+        return score
+
     def _get_kernel(self, X, Y=None, n_jobs=1):
         """
         Calculate kernel matrix for given sets of features.
@@ -436,7 +548,7 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
 
         return K_XY
 
-    def predict(self, X1, X2=None, n_jobs=1, return_label=True):
+    def predict_pairwise(self, X1, X2=None, return_label=True):
         """
         Predict for each example u in {1,...,n} (set 1) whether it elutes before each example v in {1,...,m} (set 2).
 
@@ -450,8 +562,6 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
             -- or --
             kernel-matrix: shape = (n_samples_train, n_samples_set2)
 
-        :param n_jobs: integer, number of jobs passed to '_get_kernel', default=1
-
         :param return_label: boolean, indicating whether the label {-1, 1} should be returned, default=True
 
         :return: array-like, shape = (n_samples_set1, n_samples_set2). Entry at index [u, v] is either:
@@ -459,12 +569,12 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
             -1: otherwise (v elutes before u)
              0: predicted target values for u and v are equal: wtx(v) == wtx(u)
         """
-        wtX1 = self.map_values(X1, n_jobs=n_jobs)
+        wtX1 = self.predict(X1)
 
         if X2 is None:
             wtX2 = wtX1
         else:
-            wtX2 = self.map_values(X2, n_jobs=n_jobs)
+            wtX2 = self.predict(X2)
 
         # Calculate pairwise predictions
         Y = - wtX1 + wtX2.T
@@ -472,76 +582,6 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
             Y = np.sign(Y)  # -sign(x) = sign(-x), need to flip sign as we have (i, j) => j - i > 0
 
         return Y
-
-    def map_values(self, X, n_jobs=1):
-        """
-        Calculates w^T\phi for a set of examples.
-
-        :param X: array-like, data description
-            feature-vectors: shape = (n_samples_test, d)
-            -- or --
-            kernel-matrix: shape = (n_samples_train, n_samples_test),
-
-        :param n_jobs: integer, number of jobs passed to '_get_kernel' (default = 1)
-
-        :return: array-like, shape = (n_samples_test, ), mapped values for all examples.
-        """
-        if self.kernel == "precomputed":
-            if not X.shape[0] == self._KX_fit.shape[0]:
-                raise ValueError("Train-test kernel must have as many rows as training examples.")
-        else:
-            X = self._get_kernel(self._X_fit, X, n_jobs=n_jobs)  # shape = (n_samples_train, n_samples_test)
-
-        return ((self._alpha.T @ self._A) @ X).T  # TODO: Consider the support vectors
-
-    def score(self, X, pairs, sample_weight=None, normalize=True):
-        """
-        :param X: array-like, data description
-            feature-vectors: shape = (n_samples_test, d)
-            -- or --
-            kernel-matrix: shape = (n_samples_train, n_samples_test),
-
-            with n being the number of test molecules.
-
-        :param pairs: list of index-tuples, shape = (n_pairs_test,), encoding the pairwise
-            object relations:
-                i is preferred over j, u is preferred over v, ... --> [(i,j), (u,v), ...]},
-
-                where i, j, u, v, ... are the indices corresponding to the object descriptions
-                given in X.
-
-            In this implementation we assume that, e.g.,
-                i is preferred over j <==> target[i] < target[j], ...
-
-        :param sample_weight: parameter currently not used.
-
-        :param normalize: logical, indicating whether the number of correctly classified pairs
-            should be normalized by the total number of pairs (n_pairs_test).
-
-        :return: scalar, pairwise prediction accuracy
-        """
-        if len(pairs) == 0:
-            raise RuntimeError("Score is undefined of the number of test pairs is zero.")
-
-        return self.score_pairwise_using_prediction(self.predict(X), pairs, normalize=normalize)
-
-    def score_pointwise(self, X, y, normalize=True):
-        """
-        :param X: array-like, data description
-            feature-vectors: shape = (n_samples_test, d)
-            -- or --
-            kernel-matrix: shape = (n_samples_train, n_samples_test),
-
-            with n being the number of test molecules.
-
-        :param y: array-like, shape = (n_samples_test,), true target values for the test samples.
-
-        :param normalize: logical, indicating whether the number of correctly classified pairs
-            should be normalized by the total number of pairs (n_pairs_test).
-
-        :return: scalar, pairwise prediction accuracy
-        """
-        return self.score_pointwise_using_predictions(self.map_values(X), y, normalize)
 
     def _evaluate_primal_objective(self, alpha, pairwise_confidence):
         """
@@ -572,12 +612,12 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
         """
         return pairwise_confidence.T @ alpha - (alpha.T @ self._last_AKAt_y) / 2.0
 
-    def _is_feasible(self, alpha):
+    def _assert_is_feasible(self, alpha):
         """
         Check whether the provided alpha vector is in the feasible set:
 
             1) alpha.shape == (|P|, 1)
-            2) 0 <= alpha_ij <= C for all (i,j) in P
+            2) 0 <= alpha_ij <= (C / N) for all (i, j) in P
 
         :param alpha: array-like, shape = (p, 1), dual variables
 
@@ -585,28 +625,31 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
             True,  if alpha is in the feasible set
             False, otherwise
         """
-        n_pairs = len(self._pairs_fit)
+        n_pairs = len(self._pairs_train)
+        n_dual = alpha.shape[0]
 
-        is_feasible = (0 <= alpha).all() and (alpha <= self.C).all() and (alpha.shape == (n_pairs, 1))
+        if np.any(alpha < 0):
+            raise FeasibilityError("Some dual variables are not positive.")
 
-        return is_feasible
+        if np.any(alpha > self.C):
+            raise FeasibilityError("Some dual variables are larger C. Max alpha_i = %f" % np.max(alpha))
 
-    def _get_optimal_alpha_bar(self, alpha, r):
+        if n_dual != n_pairs:
+            raise FeasibilityError("Wrong number of dual variables.")
+
+    def _solve_sub_problem(self, alpha):
         """
-        Finding the alpha*
+        Finding the feasible update direction.
 
-        :param r: array-like, shape = (p, 1), confidence values for the pairwise
-            relations
-
-        :return: array-like, shape = (p, 1), alpha*
+        :return: array-like, shape = (p, 1), s
         """
         self._last_AKAt_y = self._x_AKAt_y(y=alpha)
-        d = r - self._last_AKAt_y
+        d = 1 - self._last_AKAt_y
 
-        alpha_bar = np.zeros((self._A.shape[0], 1))
-        alpha_bar[d > 0] = self.C
+        s = np.zeros_like(alpha)
+        s[d > 0] = self.C
 
-        return alpha_bar
+        return s
 
     def _x_AKAt_y(self, x=None, y=None):
         """
@@ -628,23 +671,30 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
         """
         if (x is not None) and (y is not None):
 
-            return (x.T @ (self._A @ (self._KX_fit @ (self._A.T @ y)))).item()
+            return (x.T @ (self._A @ (self._KX_train @ (self._A.T @ y)))).item()
 
         elif (x is None) and (y is not None):
 
-            return self._A @ (self._KX_fit @ (self._A.T @ y))
+            return self._A @ (self._KX_train @ (self._A.T @ y))
 
         elif (x is not None) and (y is None):
 
-            return (self._A @ ((self._A.T @ x).T @ self._KX_fit).T).T
+            return (self._A @ ((self._A.T @ x).T @ self._KX_train).T).T
 
         else:
 
-            return self._A @ self._KX_fit @ self._A.T
+            return self._A @ self._KX_train @ self._A.T
 
     # ---------------------------------
     # Static methods
     # ---------------------------------
+    @staticmethod
+    def _bound_alpha(alpha, threshold, min_alpha_val, max_alpha_val):
+        alpha = np.array(alpha)
+        alpha[np.isclose(alpha, min_alpha_val, atol=threshold)] = min_alpha_val
+        alpha[np.isclose(alpha, max_alpha_val, atol=threshold)] = max_alpha_val
+        return alpha
+
     @staticmethod
     def _build_A_matrix(pairs, y, n_samples):
         """
@@ -691,7 +741,7 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
         if p < 0 or p > 100:
             raise ValueError("Percentage must be from range [0, 100]")
 
-        return np.round((n * p) / 100)
+        return np.round((n * p) / 100).astype("int")
 
     @staticmethod
     def _get_step_size_diminishing(k, C, t_0):
@@ -793,3 +843,39 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
             tp /= len(pairs)
 
         return tp
+
+
+if __name__ == "__main__":
+    import pandas as pd
+    import matplotlib.pyplot as plt
+
+    from sklearn.model_selection import GroupKFold
+
+    # Load example data
+    data = pd.read_csv("ranksvm/tests/example_data.csv", sep="\t")
+    X = np.array(list(map(lambda x: x.split(","), data.substructure_count.values)), dtype="float")
+    # TODO: Make the label stuff compatible to sklearn: Need to be able to subset using list of integers.
+    rts = data.rt.values
+    dss = data.dataset.values
+    y = list(zip(rts, dss))
+    # print(y)
+    mol = data.smiles.values
+
+    # Split into training and test
+    train, test = next(GroupKFold(n_splits=3).split(X, groups=mol))
+    print("(n_train, n_test) = (%d, %d)" % (len(train), len(test)))
+    assert not (set(mol[train]) & set(mol[test]))
+
+    X_train, X_test = X[train], X[test]
+    y_train, y_test = [y[idx] for idx in train], [y[idx] for idx in test]
+    dss_test = dss[test]
+    rts_test = rts[test]
+
+    ranksvm = KernelRankSVC(C=1, kernel="minmax", pair_generation="random", random_state=2921,
+                            max_iter=1000, alpha_threshold=1e-2).fit(X_train, y_train)
+    print(ranksvm.score(X_test, y_test))
+
+    fig, axrr = plt.subplots(1, 2, figsize=(14, 5))
+    axrr[0].scatter(rts_test[dss_test == "FEM_long"], ranksvm.predict(X_test[dss_test == "FEM_long"]))
+    axrr[1].scatter(rts_test[dss_test == "UFZ_Phenomenex"], ranksvm.predict(X_test[dss_test == "UFZ_Phenomenex"]))
+    plt.show()
