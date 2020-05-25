@@ -43,7 +43,7 @@ def get_pairs_multiple_datasets(targets, d_lower=1, d_upper=np.inf):
           example pairs, those rank differs more than a specified threshold. We
           can in that way reduce the number of learning pairs.
 
-    :param targets: list of tuples, length = n_samples, the targets values, e.g.
+    :param targets: Labels, length = n_samples, the targets values, e.g.
                     retention times, for all molecules measured with a set of
                     datasets.
 
@@ -81,16 +81,15 @@ def get_pairs_multiple_datasets(targets, d_lower=1, d_upper=np.inf):
     n_samples = len(targets)
 
     # Separate retention times and corresponding dataset information
-    rts, dss = zip(*targets)
-    rts = np.array(rts)
-    dss = np.array(dss)
+    rts = np.array(targets.get_rts())
+    dss = np.array(targets.get_dss())
 
     # Calculate retention order rank for each rt measurement separately for each dataset.
     ranks = np.zeros(n_samples)
     for ds in set(dss):
         ranks[dss == ds] = rankdata(rts[dss == ds], method="dense")
 
-    # Output data
+    # Output tutorial
     pairs = []  # pair tuples
     signs = []  # sign of the retention time / retention order rank difference
     pdss = []  # dataset identifier belonging the each pair

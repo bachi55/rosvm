@@ -29,29 +29,27 @@ import numpy as np
 
 # Import function to test
 from pair_utils_2 import get_pairs_multiple_datasets
+from rank_svm_cls_2 import Labels
 
 
 class TestPairGeneration(unittest.TestCase):
     def test_bordercases(self):
         # ----------------------------------------------
-        targets = [(1, 1), (2, 2), (3, 3)]  # (rt, ds)
-        pairs, signs, pdss = get_pairs_multiple_datasets(targets)
+        pairs, signs, pdss = get_pairs_multiple_datasets(Labels([1, 2, 3], [1, 2, 3]))
 
         self.assertEqual(0, len(pairs))
         self.assertEqual(0, len(signs))
         self.assertEqual(0, len(pdss))
 
         # ----------------------------------------------
-        targets = [(1, "A"), (2, "B"), (3, "C")]  # (rt, ds)
-        pairs, signs, pdss = get_pairs_multiple_datasets(targets)
+        pairs, signs, pdss = get_pairs_multiple_datasets(Labels([1, 2, 3], ["A", "B", "C"]))
 
         self.assertEqual(0, len(pairs))
         self.assertEqual(0, len(signs))
         self.assertEqual(0, len(pdss))
 
         # ----------------------------------------------
-        targets = [(2, 1), (3, 1), (2, 2), (3, 2)]  # (rt, ds)
-        pairs, signs, pdss = get_pairs_multiple_datasets(targets)
+        pairs, signs, pdss = get_pairs_multiple_datasets(Labels([2, 3, 2, 3], [1, 1, 2, 2]))
 
         self.assertEqual(2, len(pairs))
         self.assertEqual(2, len(signs))
@@ -61,8 +59,7 @@ class TestPairGeneration(unittest.TestCase):
         self.assertEqual([1, 2], pdss)
 
         # ----------------------------------------------
-        targets = [(2, "B"), (3, "B"), (2, "A"), (3, "A")]  # (rt, ds)
-        pairs, signs, pdss = get_pairs_multiple_datasets(targets)
+        pairs, signs, pdss = get_pairs_multiple_datasets(Labels([2, 3, 2, 3], ["B", "B", "A", "A"]))
 
         self.assertEqual(2, len(pairs))
         self.assertEqual(2, len(signs))
@@ -72,8 +69,7 @@ class TestPairGeneration(unittest.TestCase):
         self.assertEqual(["B", "A"], pdss)
 
         # ----------------------------------------------
-        targets = [(2, 1), (3, 1), (1, 1), (3, 2), (3, 2)]  # (rt, ds)
-        pairs, signs, pdss = get_pairs_multiple_datasets(targets)
+        pairs, signs, pdss = get_pairs_multiple_datasets(Labels([2, 3, 1, 3, 3], [1, 1, 1, 2, 2]))
 
         self.assertEqual(3, len(pairs))
         self.assertEqual(3, len(signs))
@@ -83,8 +79,7 @@ class TestPairGeneration(unittest.TestCase):
         self.assertEqual([1, 1, 1], pdss)
 
         # ----------------------------------------------
-        targets = [(2, "A"), (3, "A"), (1, "A"), (3, "B"), (3, "B")]  # (rt, ds)
-        pairs, signs, pdss = get_pairs_multiple_datasets(targets)
+        pairs, signs, pdss = get_pairs_multiple_datasets(Labels([2, 3, 1, 3, 3], ["A", "A", "A", "B", "B"]))
 
         self.assertEqual(3, len(pairs))
         self.assertEqual(3, len(signs))
@@ -95,7 +90,7 @@ class TestPairGeneration(unittest.TestCase):
 
     def test_single_system_dataset(self):
         # ----------------------------------------------
-        targets = [(10, "A"), (4, "A"), (6, "A"), (8, "A"), (2, "A")]
+        targets = Labels([10, 4, 6, 8, 2], ["A", "A", "A", "A", "A"])
         n_samples = len(targets)
         d_pairs_ref = {0: [],
                        1: [(1, 4), (1, 2), (2, 3), (0, 3)],
@@ -162,7 +157,7 @@ class TestPairGeneration(unittest.TestCase):
 
     def test_multiple_system_dataset(self):
         # ----------------------------------------------
-        targets = [(5, "A"), (2, "A"), (3, "A"), (4, "A"), (1, "A"), (1, "B"), (10, "B"), (5, "B"), (12, "B")]
+        targets = Labels([6, 2, 3, 4, 1, 1, 10, 5, 12], ["A", "A", "A", "A", "A", "B", "B", "B", "B"])
         n_samples_A = 5
         n_samples_B = 4
         d_pairs_ref = {0: [],
@@ -204,7 +199,7 @@ class TestPairGeneration(unittest.TestCase):
         self.assertEqual(["A"] * max_n_pairs_A_ref + ["B"] * max_n_pairs_B_ref, pdss)
 
         # ----------------------------------------------
-        targets = [(1, "A"), (2, "A"), (3, "A"), (4, "A"), (1, "B"), (2, "B"), (1.5, "B")]
+        targets = Labels([1, 2, 3, 4, 1, 2, 1.5], ["A", "A", "A", "A", "B", "B", "B"])
         n_samples_A = 4
         n_samples_B = 3
         d_pairs_ref = {4: [],

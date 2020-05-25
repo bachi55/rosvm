@@ -56,7 +56,7 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
 
     :param C: scalar, regularization parameter of the SVM (default = 1.0)
 
-    :param kernel: string or callable, determining the kernel used for the data. Logic of this function
+    :param kernel: string or callable, determining the kernel used for the tutorial. Logic of this function
         (default = "precomputed")
         - "precomputed": The kernel matrix is precomputed and provided to the fit and prediction function.
         - ["rbf", "polynomial", "linear"]: The kernel is computed by the scikit-learn build it functions
@@ -153,7 +153,7 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
         self.t_convergence = None
         self.obj_has_converged = False
 
-        # Training data used for fitting
+        # Training tutorial used for fitting
         self._pairs_fit = None
         self._pairwise_labels_fit = None
         self._KX_fit = None
@@ -425,7 +425,7 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
         """
         Calculates w^T\phi for a set of examples.
 
-        :param X: array-like, data description
+        :param X: array-like, tutorial description
             feature-vectors: shape = (n_samples_test, d)
             -- or --
             kernel-matrix: shape = (n_samples_train, n_samples_test),
@@ -444,7 +444,7 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
 
     def score(self, X, pairs, sample_weight=None, normalize=True):
         """
-        :param X: array-like, data description
+        :param X: array-like, tutorial description
             feature-vectors: shape = (n_samples_test, d)
             -- or --
             kernel-matrix: shape = (n_samples_train, n_samples_test),
@@ -475,7 +475,7 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
 
     def score_pointwise(self, X, y, normalize=True):
         """
-        :param X: array-like, data description
+        :param X: array-like, tutorial description
             feature-vectors: shape = (n_samples_test, d)
             -- or --
             kernel-matrix: shape = (n_samples_train, n_samples_test),
