@@ -266,12 +266,6 @@ class TestLabelsClass(unittest.TestCase):
 
         self.assertEqual(pickle.loads(pickle.dumps(y)), y)
 
-        # print(y)
-
-        # res = Parallel(n_jobs=2)(delayed(str)(y[idx]) for idx in [[1, 2, 3], [4, 5, 6, 7]])
-        # self.assertEqual("Length 3", res[0])
-        # self.assertEqual("Length 4", res[1])
-
 
 if __name__ == '__main__':
     unittest.main()
