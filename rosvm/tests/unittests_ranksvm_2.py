@@ -28,7 +28,6 @@ import unittest
 import numpy as np
 import pickle
 
-from joblib.parallel import delayed, Parallel, dumps, loads
 from sklearn.model_selection import check_cv
 from sklearn.model_selection._split import type_of_target, _CVIterableWrapper, _safe_indexing
 

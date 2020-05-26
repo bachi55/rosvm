@@ -50,7 +50,8 @@ if __name__ == "__main__":
 
     # Train the RankSVM and run gridsearch for best C
     ranksvm = GridSearchCV(
-        estimator=KernelRankSVC(kernel="minmax", pair_generation="random", random_state=2921, alpha_threshold=1e-2),
+        estimator=KernelRankSVC(kernel="minmax", pair_generation="all", random_state=2921, alpha_threshold=1e-2,
+                                max_iter=200),
         param_grid={"C": [0.5, 1, 2, 4, 8]},
         cv=GroupKFold(n_splits=3),
         n_jobs=4).fit(X_train, y_train, groups=mol_train)
@@ -58,6 +59,7 @@ if __name__ == "__main__":
 
     # Inspect RankSVM prediction
     print("Score: %3f" % ranksvm.score(X_test, y_test))
+    print(ranksvm.best_estimator_.score(X_test, y_test, return_detailed_results=True))
 
     fig, axrr = plt.subplots(1, 2, figsize=(12, 6))
     dss_test = np.array(y_test.get_dss())
