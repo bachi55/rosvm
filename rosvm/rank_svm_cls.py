@@ -34,7 +34,7 @@ from sklearn.metrics.pairwise import pairwise_kernels
 from sklearn.utils.validation import check_random_state
 from collections.abc import Sequence
 
-from pair_utils_2 import get_pairs_multiple_datasets
+from pair_utils import get_pairs_multiple_datasets
 from kernel_utils import tanimoto_kernel, minmax_kernel
 
 

@@ -31,7 +31,7 @@ import pickle
 from sklearn.model_selection import check_cv
 from sklearn.model_selection._split import type_of_target, _CVIterableWrapper, _safe_indexing
 
-from rank_svm_cls_2 import KernelRankSVC, Labels
+from rank_svm_cls import KernelRankSVC, Labels
 
 
 class TestAMatrixConstruction(unittest.TestCase):

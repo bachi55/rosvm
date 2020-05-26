@@ -30,7 +30,7 @@ import matplotlib.pyplot as plt
 
 from sklearn.model_selection import GroupKFold, GridSearchCV
 
-from rank_svm_cls_2 import Labels, KernelRankSVC
+from rank_svm_cls import Labels, KernelRankSVC
 
 if __name__ == "__main__":
     # Load example tutorial
