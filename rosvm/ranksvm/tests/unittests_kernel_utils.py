@@ -2,7 +2,7 @@
 #
 # The MIT License (MIT)
 #
-# Copyright 2019 Eric Bach <eric.bach@aalto.fi>
+# Copyright 2019, 2020 Eric Bach <eric.bach@aalto.fi>
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -30,7 +30,7 @@ import itertools as it
 
 from scipy.sparse import csr_matrix
 
-from kernel_utils import minmax_kernel, tanimoto_kernel, check_input, generalized_tanimoto_kernel
+from ranksvm.kernel_utils import minmax_kernel, tanimoto_kernel, check_input, generalized_tanimoto_kernel
 
 
 class TestCheckInput(unittest.TestCase):

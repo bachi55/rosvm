@@ -28,8 +28,8 @@ import unittest
 import numpy as np
 
 # Import function to test
-from pair_utils import get_pairs_multiple_datasets
-from rank_svm_cls import Labels
+from ranksvm.pair_utils import get_pairs_multiple_datasets
+from ranksvm.rank_svm_cls import Labels
 
 
 class TestPairGeneration(unittest.TestCase):

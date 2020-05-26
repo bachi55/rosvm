@@ -34,8 +34,8 @@ from sklearn.metrics.pairwise import pairwise_kernels
 from sklearn.utils.validation import check_random_state
 from collections.abc import Sequence
 
-from pair_utils import get_pairs_multiple_datasets
-from kernel_utils import tanimoto_kernel, minmax_kernel
+from ranksvm.pair_utils import get_pairs_multiple_datasets
+from ranksvm.kernel_utils import tanimoto_kernel, minmax_kernel
 
 
 class Labels(Sequence):
@@ -748,7 +748,7 @@ if __name__ == "__main__":
     from sklearn.model_selection import GroupKFold, GridSearchCV
 
     # Load example tutorial
-    data = pd.read_csv("ranksvm/tutorial/example_data.csv", sep="\t")
+    data = pd.read_csv("tutorial/example_data.csv", sep="\t")
     X = np.array(list(map(lambda x: x.split(","), data.substructure_count.values)), dtype="float")
     y = Labels(data.rt.values, data.dataset.values)
     mol = data.smiles.values
