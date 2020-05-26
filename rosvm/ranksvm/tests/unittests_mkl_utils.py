@@ -27,7 +27,7 @@
 import unittest
 import numpy as np
 
-from mkl_utils import frobenius_product, kernel_alignment, LinearMKLer
+from ranksvm.mkl_utils import frobenius_product, kernel_alignment, LinearMKLer
 
 from sklearn.model_selection import ShuffleSplit
 from sklearn.datasets import make_classification
