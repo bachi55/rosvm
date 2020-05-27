@@ -32,6 +32,37 @@ from sklearn.model_selection import check_cv
 from sklearn.model_selection._split import type_of_target, _CVIterableWrapper, _safe_indexing
 
 from ranksvm.rank_svm_cls import KernelRankSVC, Labels
+from ranksvm.tests.gradient_of_exterior_features import fAndG
+
+
+class TestPMatrixConstruction(unittest.TestCase):
+    def test_small_example(self):
+        pairs = [(0, 1), (1, 2), (1, 3), (0, 3), (5, 1)]
+        n_samples = 6
+        n_pairs = len(pairs)
+
+        P_0, P_1 = KernelRankSVC._build_P_matrices(pairs, n_samples)
+
+        self.assertEqual((n_pairs, n_samples), P_0.shape)
+        self.assertEqual((n_pairs, n_samples), P_1.shape)
+
+        np.testing.assert_equal(
+            np.array([[1, 0, 0, 0, 0, 0],
+                      [0, 1, 0, 0, 0, 0],
+                      [0, 1, 0, 0, 0, 0],
+                      [1, 0, 0, 0, 0, 0],
+                      [0, 0, 0, 0, 0, 1]], dtype="float"),
+            P_0.todense()
+        )
+
+        np.testing.assert_equal(
+            np.array([[0, 1, 0, 0, 0, 0],
+                      [0, 0, 1, 0, 0, 0],
+                      [0, 0, 0, 1, 0, 0],
+                      [0, 0, 0, 1, 0, 0],
+                      [0, 1, 0, 0, 0, 0]], dtype="float"),
+            P_1.todense()
+        )
 
 
 class TestAMatrixConstruction(unittest.TestCase):
@@ -39,11 +70,12 @@ class TestAMatrixConstruction(unittest.TestCase):
         # -----------------------------------------------
         pairs = [(0, 1), (1, 2), (1, 3), (0, 3), (5, 1)]
         y = [1, 1, 1, -1, -1]
+        n_pairs = len(pairs)
 
         n_samples = 6
         A = KernelRankSVC._build_A_matrix(pairs, y, n_samples=n_samples)
 
-        self.assertEqual((5, n_samples), A.shape)
+        self.assertEqual((n_pairs, n_samples), A.shape)
         np.testing.assert_equal(
             np.array([[1, -1, 0, 0, 0, 0],
                       [0, 1, -1, 0, 0, 0],
@@ -174,6 +206,49 @@ class TestPointwiseScoringFunction(unittest.TestCase):
         self.assertEqual(perf, 0.5)
 
 
+class TestDualGradients(unittest.TestCase):
+    def test_exterior_features(self):
+        """
+        Adaptation of the gradient test code provided by: www.matrixcalculus.org.
+        """
+        # Set up data
+        rs = np.random.RandomState(1929)
+
+        for _ in range(10):
+            n_samples = rs.randint(4, 10)
+            K = rs.randn(n_samples, n_samples)
+            K = 0.5 * (K + K.T)  # make it symmetric
+
+            pairs = []
+            y = []
+            for _ in range(rs.randint(3, 10)):
+                pairs.append(tuple(rs.choice(np.arange(n_samples), 2, replace=False)))
+                y.append(rs.choice([1, -1], 1).item())
+
+            P_0, P_1 = KernelRankSVC._build_P_matrices(pairs, n_samples)
+            n_pairs = P_0.shape[0]
+
+            alpha = rs.rand(n_pairs)
+            assert np.all(alpha > 0)  # Dual variables are always positive
+
+            # Check the gradient
+            rsvm = KernelRankSVC()
+            rsvm.KX_train_ = K
+            rsvm.P_0_ = P_0
+            rsvm.P_1_ = P_1
+            rsvm.py_train_ = y
+
+            # t = 1e-6
+            # delta = rs.rand(n_pairs)
+            # f1, _ = fAndG(K=K, P=P_0, Q=P_1, alpha=alpha + t * delta, y=y)
+            # f2, _ = fAndG(K=K, P=P_0, Q=P_1, alpha=alpha - t * delta, y=y)
+
+            _, g_ref = fAndG(K=K, P=P_0.toarray(), Q=P_1.toarray(), alpha=alpha, y=np.array(y))
+            g = rsvm._grad_exterior_feat(alpha)  # own gradient implementation
+
+            np.testing.assert_allclose(g_ref, g)
+
+
 class TestAlphaThreshold(unittest.TestCase):
     def test_correctness(self):
         self.skipTest("Implement")
@@ -269,3 +344,4 @@ class TestLabelsClass(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
