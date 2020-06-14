@@ -251,7 +251,17 @@ class TestDualGradients(unittest.TestCase):
 
 class TestAlphaThreshold(unittest.TestCase):
     def test_correctness(self):
-        self.skipTest("Implement")
+        alpha_bnd = KernelRankSVC._bound_alpha(np.array([0.001, 0.01, 0.1, 0.99, 0.999, 1.0]), 0.01, 0, 1)
+        np.testing.assert_equal(alpha_bnd, np.array([0, 0, 0.1, 1.0, 1.0, 1.0]))
+
+        alpha_bnd = KernelRankSVC._bound_alpha(np.array([0.001, 0.01, 0.1, 0.99, 0.999, 1.0]), 0.001, 0, 1)
+        np.testing.assert_equal(alpha_bnd, np.array([0, 0.01, 0.1, 0.99, 1.0, 1.0]))
+
+        alpha_bnd = KernelRankSVC._bound_alpha(np.array([0.001001, 0.01, 0.1, 0.99, 0.99899, 1.0]), 0.001, 0, 1)
+        np.testing.assert_equal(alpha_bnd, np.array([0.001001, 0.01, 0.1, 0.99, 0.99899, 1.0]))
+
+        alpha_bnd = KernelRankSVC._bound_alpha(np.array([0.001001, 0.01, 0.1, 0.99, 0.99899, 1.0]), 0.0001, 0, 1)
+        np.testing.assert_equal(alpha_bnd, np.array([0.001001, 0.01, 0.1, 0.99, 0.99899, 1.0]))
 
 
 class TestLabelsClass(unittest.TestCase):

@@ -50,8 +50,8 @@ if __name__ == "__main__":
 
     # Train the RankSVM and run gridsearch for best C
     ranksvm = GridSearchCV(
-        estimator=KernelRankSVC(kernel="minmax", pair_generation="all", random_state=2921, alpha_threshold=1e-2,
-                                max_iter=200),
+        estimator=KernelRankSVC(kernel="minmax", pair_generation="random", random_state=2921, alpha_threshold=1e-2,
+                                max_iter=1000),
         param_grid={"C": [0.5, 1, 2, 4, 8]},
         cv=GroupKFold(n_splits=3),
         n_jobs=4).fit(X_train, y_train, groups=mol_train)
@@ -59,11 +59,13 @@ if __name__ == "__main__":
 
     # Inspect RankSVM prediction
     print("Score: %3f" % ranksvm.score(X_test, y_test))
-    print(ranksvm.best_estimator_.score(X_test, y_test, return_detailed_results=True))
+    print(ranksvm.best_estimator_.score(X_test, y_test, return_score_per_dataset=True))
 
     fig, axrr = plt.subplots(1, 2, figsize=(12, 6))
     dss_test = np.array(y_test.get_dss())
     rts_test = np.array(y_test.get_rts())
-    axrr[0].scatter(rts_test[dss_test == "FEM_long"], ranksvm.predict(X_test[dss_test == "FEM_long"]))
-    axrr[1].scatter(rts_test[dss_test == "UFZ_Phenomenex"], ranksvm.predict(X_test[dss_test == "UFZ_Phenomenex"]))
+    axrr[0].scatter(rts_test[dss_test == "FEM_long"],
+                    ranksvm.best_estimator_.predict_pointwise(X_test[dss_test == "FEM_long"]))
+    axrr[1].scatter(rts_test[dss_test == "UFZ_Phenomenex"],
+                    ranksvm.best_estimator_.predict_pointwise(X_test[dss_test == "UFZ_Phenomenex"]))
     plt.show()
