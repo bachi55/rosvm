@@ -25,19 +25,16 @@
 ####
 
 import numpy as np
-import pandas as pd
 import matplotlib.pyplot as plt
 
 from sklearn.model_selection import GroupKFold, GridSearchCV
 
-from rosvm.ranksvm.rank_svm_cls import Labels, KernelRankSVC
+from rosvm.ranksvm.rank_svm_cls import KernelRankSVC
+from rosvm.ranksvm.tutorial.utils import read_dataset
 
 if __name__ == "__main__":
     # Load example tutorial
-    data = pd.read_csv("./example_data.csv", sep="\t")
-    X = np.array(list(map(lambda x: x.split(","), data.substructure_count.values)), dtype="float")
-    y = Labels(data.rt.values, data.dataset.values)
-    mol = data.smiles.values
+    X, y, mol = read_dataset("./example_data.csv")
 
     # Split into training and test
     train, test = next(GroupKFold(n_splits=3).split(X, y, groups=mol))
