@@ -32,6 +32,7 @@ import itertools
 from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.metrics.pairwise import pairwise_kernels
 from sklearn.utils.validation import check_random_state
+from sklearn.model_selection import train_test_split
 from collections.abc import Sequence
 
 from rosvm.ranksvm.pair_utils import get_pairs_multiple_datasets
@@ -167,6 +168,12 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
         effect the labels of the training pairs. Check the 'fit' and 'get_pairwise_labels' functions
         for details.
 
+    :param debug: boolean, indicating whether debug information should be stored in the RankSVM
+        class. Those include:
+            - Objective function values (primal, dual and duality gap)
+            - Prediction accuracy on a validation set (sub-set of the provided training set) throughout the epochs
+            - Step size
+
     Kernels:
     --------
     "linear": K(X, Y) = <X, Y>
@@ -176,7 +183,8 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
     SOURCE: http://scikit-learn.org/stable/modules/classes.html#module-sklearn.metrics.pairwise
     """
     def __init__(self, C=1.0, kernel="precomputed", max_iter=1000, gamma=None, coef0=1, degree=3, kernel_params=None,
-                 random_state=None, pair_generation="eccb", alpha_threshold=1e-4, pairwise_features="difference"):
+                 random_state=None, pair_generation="eccb", alpha_threshold=1e-4, pairwise_features="difference",
+                 debug=False):
 
         # Parameter for the optimization
         self.max_iter = max_iter
@@ -202,6 +210,7 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
 
         # Debug parameters
         self.random_state = random_state
+        self.debug = debug
 
         # Model parameters
         #   self.pairs_train_ = None
@@ -212,9 +221,8 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
         #   self.py_train_ = None
         #   self.pdss_train_ = None
         #   self.alpha_ = None
-        #   self.is_sv_ = None
 
-    def fit(self, X, y):
+    def fit(self, X: object, y: object) -> object:
         """
         Estimating the parameters of the dual ranking svm with scaled margin.
         The conditional gradient descent algorithm is used to find the optimal
@@ -236,7 +244,24 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
         """
         rs = check_random_state(self.random_state)
 
-        # Handle training tutorial
+        if self.debug:
+            if self.kernel == "precomputed":
+                raise ValueError("Precomputed kernels cannot be provided in the debug mode.")
+
+            # Separate 15% of the data into the validation set
+            X, X_val, y, y_val = train_test_split(X, y, test_size=0.15, random_state=rs)
+
+            self.debug_data_ = {
+                "train_score": [],
+                "val_score": [],
+                "primal_obj": [],
+                "dual_obj": [],
+                "duality_gap": [],
+                "step_size": [],
+                "step": []
+            }
+
+        # Handle training data and calculate kernels if needed
         if self.kernel == "precomputed":
             if X.shape[0] != X.shape[1]:
                 raise ValueError("Precomputed kernel matrix must be squared: You provided KX.shape = (%d, %d)."
@@ -279,9 +304,24 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
 
         k = 0
         while k < self.max_iter:
+            if self.debug and (k % 20 == 0):
+                # Validation and training scores
+                self.debug_data_["train_score"].append(self.score(X, y))
+                self.debug_data_["val_score"].append(self.score(X_val, y_val))
+
+                # Objective values
+                prim, dual, gap = self._evaluate_primal_and_dual_objective(self.alpha_)
+                self.debug_data_["primal_obj"].append(prim)
+                self.debug_data_["dual_obj"].append(dual)
+                self.debug_data_["duality_gap"].append(gap)
+
+                # General information about the convergence
+                self.debug_data_["step_size"].append(self._get_step_size_diminishing_3(k))
+                self.debug_data_["step"].append(k)
+
             s = self._solve_sub_problem(self.alpha_)  # feasible update direction
 
-            tau = 2 / (k + 2)  # step-width
+            tau = self._get_step_size_diminishing_3(k)  # step-width
 
             self.alpha_ = self.alpha_ + tau * (s - self.alpha_)
 
@@ -305,7 +345,8 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
         self.py_train_ = [self.py_train_[idx] for idx, _is_sv in enumerate(is_sv) if _is_sv]
         self.pdss_train_ = [self.pdss_train_[idx] for idx, _is_sv in enumerate(is_sv) if _is_sv]
 
-        print("n_support: %d (out of %d)" % (np.sum(is_sv).item(), len(is_sv)))
+        if self.debug:
+            self.debug_data_ = {key: np.array(value) for key, value in self.debug_data_.items()}
 
         return self
 
@@ -718,6 +759,10 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
         :return: scalar, step size
         """
         return t - (t**2 / 2.0)
+
+    @staticmethod
+    def _get_step_size_diminishing_3(k):
+        return 2 / (k + 2)
 
     @staticmethod
     def score_pointwise_using_predictions(y, y_pred, normalize=True):
