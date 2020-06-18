@@ -30,7 +30,7 @@ import itertools as it
 
 from scipy.sparse import csr_matrix
 
-from ranksvm.kernel_utils import minmax_kernel, tanimoto_kernel, check_input, generalized_tanimoto_kernel
+from rosvm.ranksvm.kernel_utils import minmax_kernel, tanimoto_kernel, check_input, generalized_tanimoto_kernel
 
 
 class TestCheckInput(unittest.TestCase):
