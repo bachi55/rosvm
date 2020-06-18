@@ -351,6 +351,20 @@ class TestLabelsClass(unittest.TestCase):
 
         self.assertEqual(pickle.loads(pickle.dumps(y)), y)
 
+    def test_getting_ds_indices(self):
+        rts = [1, 2, 3, 9, 18, 16, 1, 2, 0, 3.1, 2.1, 0.3]
+        dss = ["A", "A", "C", "C", "A", "A", "A", "C", "C", "A", "B", "B"]
+        y = Labels(rts, dss)
+
+        self.assertEqual([0, 1, 4, 5, 6, 9], y.get_idc_for_ds("A"))
+        self.assertEqual([10, 11], y.get_idc_for_ds("B"))
+        self.assertEqual([2, 3, 7, 8], y.get_idc_for_ds("C"))
+
+        with self.assertRaises(KeyError):
+            y.get_idc_for_ds("D")
+
+        self.assertEqual([], y.get_idc_for_ds("D", on_missing_raise=False))
+
 
 if __name__ == '__main__':
     unittest.main()

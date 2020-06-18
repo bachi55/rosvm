@@ -52,6 +52,7 @@ class Labels(Sequence):
         self._dss = dss
         if len(self._rts) != len(self._dss):
             raise ValueError("Number of retention times must be equal the number of the dataset identifiers.")
+        self._unique_ds = set(self._dss)
 
         self.shape = (len(self._rts),)  # needed for scikit-learn input checks
 
@@ -97,6 +98,15 @@ class Labels(Sequence):
 
     def get_dss(self):
         return self._dss
+
+    def get_unique_dss(self):
+        return self._unique_ds
+
+    def get_idc_for_ds(self, ds, on_missing_raise=True):
+        if on_missing_raise and (ds not in set(self.get_unique_dss())):
+            raise KeyError("No example in the label-set belongs to the dataset '%s'." % ds)
+
+        return [i for i, _ds in enumerate(self.get_dss()) if _ds == ds]
 
     def get_data(self):
         return self.get_rts(), self.get_dss()
