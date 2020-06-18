@@ -31,8 +31,8 @@ import pickle
 from sklearn.model_selection import check_cv
 from sklearn.model_selection._split import type_of_target, _CVIterableWrapper, _safe_indexing
 
-from ranksvm.rank_svm_cls import KernelRankSVC, Labels
-from ranksvm.tests.gradient_of_exterior_features import fAndG
+from rosvm.ranksvm.rank_svm_cls import KernelRankSVC, Labels
+from rosvm.ranksvm.tests.gradient_of_exterior_features import fAndG
 
 
 class TestPMatrixConstruction(unittest.TestCase):

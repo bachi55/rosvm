@@ -34,8 +34,8 @@ from sklearn.metrics.pairwise import pairwise_kernels
 from sklearn.utils.validation import check_random_state
 from collections.abc import Sequence
 
-from ranksvm.pair_utils import get_pairs_multiple_datasets
-from ranksvm.kernel_utils import tanimoto_kernel, minmax_kernel
+from rosvm.ranksvm.pair_utils import get_pairs_multiple_datasets
+from rosvm.ranksvm.kernel_utils import tanimoto_kernel, minmax_kernel
 
 
 class Labels(Sequence):
