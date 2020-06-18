@@ -269,22 +269,6 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
             self.py_train_ = [self.py_train_[idx] for idx in _idc]
             self.pdss_train_ = [self.pdss_train_[idx] for idx in _idc]
 
-        # # TODO: Balance the positive and negative classes here.
-        # # TODO: Test the balancing code.
-        # n_pos = np.sum(np.array(self.py_train_) == 1)
-        # n_neg = len(self.py_train_) - n_pos
-        # n_to_flip = int(np.ceil(np.abs(n_pos - n_neg) / 2))
-        # sign_to_flip = np.sign(n_pos - n_neg)
-        # n_flipped = 0
-        # for ij, y_ij in enumerate(self.py_train_):
-        #     if n_flipped == n_to_flip:
-        #         break
-        #
-        #     if y_ij == sign_to_flip:
-        #         self.pairs_train_[ij] = (self.pairs_train_[ij][1], self.pairs_train_[ij][0])
-        #         self.py_train_[ij] = - self.py_train_[ij]
-        #         n_flipped += 1
-
         if self.pairwise_features == "difference":
             self.A_ = self._build_A_matrix(self.pairs_train_, self.py_train_, self.KX_train_.shape[0])
         elif self.pairwise_features == "exterior_product":
