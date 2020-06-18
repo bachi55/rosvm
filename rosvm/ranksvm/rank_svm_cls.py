@@ -274,38 +274,38 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
         elif self.pairwise_features == "exterior_product":
             self.P_0_, self.P_1_ = self._build_P_matrices(self.pairs_train_, self.KX_train_.shape[0])
 
-        # Initialize alpha: all dual variables are zero
-        alpha = np.full(len(self.pairs_train_), fill_value=self.C)  # shape = (n_pairs_train, )
+        # Initialize alpha: all dual variables are equal C
+        self.alpha_ = np.full(len(self.pairs_train_), fill_value=self.C)  # shape = (n_pairs_train, )
 
         k = 0
         while k < self.max_iter:
-            s = self._solve_sub_problem(alpha)  # feasible update direction
+            s = self._solve_sub_problem(self.alpha_)  # feasible update direction
 
             tau = 2 / (k + 2)  # step-width
 
-            alpha = alpha + tau * (s - alpha)
+            self.alpha_ = self.alpha_ + tau * (s - self.alpha_)
 
-            self._assert_is_feasible(alpha)
+            self._assert_is_feasible(self.alpha_)
 
             k += 1
 
         # Threshold dual variables to the boarder ranges, if there are very close to it.
-        alpha = self._bound_alpha(alpha, self.alpha_threshold, 0, self.C)
-        self._assert_is_feasible(alpha)
+        self.alpha_ = self._bound_alpha(self.alpha_, self.alpha_threshold, 0, self.C)
+        self._assert_is_feasible(self.alpha_)
 
-        # Only store tutorial related to the support vectors
-        self.is_sv_ = (alpha > 0)
+        # Only store information related to the support vectors
+        is_sv = (self.alpha_ > 0)
         if self.pairwise_features == "difference":
-            self.A_ = self.A_[self.is_sv_]
+            self.A_ = self.A_[is_sv]
         elif self.pairwise_features == "exterior_product":
-            self.P_0_ = self.P_0_[self.is_sv_]
-            self.P_1_ = self.P_1_[self.is_sv_]
-        self.alpha_ = alpha[self.is_sv_]
-        self.pairs_train_ = [self.pairs_train_[idx] for idx, is_sv in enumerate(self.is_sv_) if is_sv]
-        self.py_train_ = [self.py_train_[idx] for idx, is_sv in enumerate(self.is_sv_) if is_sv]
-        self.pdss_train_ = [self.pdss_train_[idx] for idx, is_sv in enumerate(self.is_sv_) if is_sv]
+            self.P_0_ = self.P_0_[is_sv]
+            self.P_1_ = self.P_1_[is_sv]
+        self.alpha_ = self.alpha_[is_sv]
+        self.pairs_train_ = [self.pairs_train_[idx] for idx, _is_sv in enumerate(is_sv) if _is_sv]
+        self.py_train_ = [self.py_train_[idx] for idx, _is_sv in enumerate(is_sv) if _is_sv]
+        self.pdss_train_ = [self.pdss_train_[idx] for idx, _is_sv in enumerate(is_sv) if _is_sv]
 
-        print("n_support: %d (out of %d)" % (np.sum(self.is_sv_).item(), len(self.is_sv_)))
+        print("n_support: %d (out of %d)" % (np.sum(is_sv).item(), len(is_sv)))
 
         return self
 
