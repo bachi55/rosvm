@@ -23,14 +23,14 @@
 # SOFTWARE.
 #
 ####
-
-import numpy as np
 import matplotlib.pyplot as plt
 
-from sklearn.model_selection import GroupKFold, GridSearchCV
+from sklearn.model_selection import GroupKFold
 
 from rosvm.ranksvm.rank_svm_cls import KernelRankSVC
 from rosvm.ranksvm.tutorial.utils import read_dataset
+from rosvm.ranksvm.analysis_utils import RankSVMAnalyzer
+
 
 if __name__ == "__main__":
     # Load example tutorial
@@ -46,15 +46,24 @@ if __name__ == "__main__":
     mol_train = mol[train]
 
     # Train the RankSVM and run gridsearch for best C
-    ranksvm = KernelRankSVC(kernel="minmax", pair_generation="random", random_state=2921, alpha_threshold=1e-2,
-                            max_iter=1000, debug=True, C=1, pairwise_features="exterior_product").fit(X_train, y_train)
+    ranksvm1 = KernelRankSVC(kernel="minmax", pair_generation="random", random_state=2921, alpha_threshold=1e-2,
+                             max_iter=500, debug=True, C=2**-4, pairwise_features="difference").fit(X_train, y_train)
+    ranksvm2 = KernelRankSVC(kernel="minmax", pair_generation="random", random_state=2921, alpha_threshold=1e-2,
+                             max_iter=500, debug=True, C=1, pairwise_features="difference").fit(X_train, y_train)
+    ranksvm3 = KernelRankSVC(kernel="minmax", pair_generation="random", random_state=2921, alpha_threshold=1e-2,
+                             max_iter=500, debug=True, C=2**4, pairwise_features="difference").fit(X_train, y_train)
 
-    plt.figure()
-    plt.semilogy(ranksvm.debug_data_["step"], ranksvm.debug_data_["primal_obj"], '.--')
-    plt.semilogy(ranksvm.debug_data_["step"], ranksvm.debug_data_["dual_obj"], '.--')
+    analyzer = RankSVMAnalyzer([ranksvm1, ranksvm2, ranksvm3])
+
+    ax = analyzer.plot_objective_functions(add_duality_gap=True, add_dual=False, add_primal=False, use_col=False)
     plt.show()
 
-    plt.figure()
-    plt.plot(ranksvm.debug_data_["step"], ranksvm.debug_data_["train_score"], '.--')
-    plt.plot(ranksvm.debug_data_["step"], ranksvm.debug_data_["val_score"], '.--')
-    plt.show()
+    # plt.figure()
+    # plt.semilogy(ranksvm.debug_data_["step"], ranksvm.debug_data_["primal_obj"], '.--')
+    # plt.semilogy(ranksvm.debug_data_["step"], ranksvm.debug_data_["dual_obj"], '.--')
+    # plt.show()
+    #
+    # plt.figure()
+    # plt.plot(ranksvm.debug_data_["step"], ranksvm.debug_data_["train_score"], '.--')
+    # plt.plot(ranksvm.debug_data_["step"], ranksvm.debug_data_["val_score"], '.--')
+    # plt.show()

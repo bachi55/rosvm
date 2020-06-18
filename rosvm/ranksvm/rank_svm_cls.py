@@ -34,9 +34,13 @@ from sklearn.metrics.pairwise import pairwise_kernels
 from sklearn.utils.validation import check_random_state
 from sklearn.model_selection import train_test_split
 from collections.abc import Sequence
+from typing import TypeVar
 
 from rosvm.ranksvm.pair_utils import get_pairs_multiple_datasets
 from rosvm.ranksvm.kernel_utils import tanimoto_kernel, minmax_kernel
+
+
+RANKSVM_T = TypeVar('RANKSVM_T', bound='KernelRankSVC')
 
 
 class Labels(Sequence):
@@ -232,7 +236,7 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
         #   self.pdss_train_ = None
         #   self.alpha_ = None
 
-    def fit(self, X: object, y: object) -> object:
+    def fit(self, X: np.ndarray, y: Labels) -> RANKSVM_T:
         """
         Estimating the parameters of the dual ranking svm with scaled margin.
         The conditional gradient descent algorithm is used to find the optimal
@@ -314,7 +318,7 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
 
         k = 0
         while k < self.max_iter:
-            if self.debug and (k % 20 == 0):
+            if self.debug and (k % 10 == 0):
                 # Validation and training scores
                 self.debug_data_["train_score"].append(self.score(X, y))
                 self.debug_data_["val_score"].append(self.score(X_val, y_val))
