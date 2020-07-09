@@ -197,11 +197,17 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
     SOURCE: http://scikit-learn.org/stable/modules/classes.html#module-sklearn.metrics.pairwise
     """
     def __init__(self, C=1.0, kernel="precomputed", max_iter=1000, gamma=None, coef0=1, degree=3, kernel_params=None,
-                 random_state=None, pair_generation="eccb", alpha_threshold=1e-4, pairwise_features="difference",
-                 debug=False):
+                 random_state=None, pair_generation="eccb", alpha_threshold=1e-3, pairwise_features="difference",
+                 debug=False, step_size="diminishing_1", tau_0=0.5, duality_gap_threshold=1e-3):
 
         # Parameter for the optimization
         self.max_iter = max_iter
+        self.step_size = step_size
+        if self.step_size not in ["diminishing_1", "diminishing_2", "diminishing_3", "linesearch"]:
+            raise ValueError("Invalid step-size method: '%s'. Choices are 'diminishing_1', 'diminishing_2', "
+                             "'diminishing_3' and 'linesearch'." % self.step_size)
+        self.tau_0 = tau_0
+        self.duality_gap_threshold = duality_gap_threshold
 
         # Kernel parameters
         self.kernel = kernel
@@ -272,8 +278,11 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
                 "dual_obj": [],
                 "duality_gap": [],
                 "step_size": [],
-                "step": []
+                "step": [],
+                "convergence_criteria": "max_iter"
             }
+        else:
+            X_val, y_val = None, None
 
         # Handle training data and calculate kernels if needed
         if self.kernel == "precomputed":
@@ -286,14 +295,11 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
             self.KX_train_ = self._get_kernel(self.X_train_)
 
         # Generate training pairs
+        select_random_pairs = False
+        pair_params = {"d_upper": np.inf, "d_lower": 1}
         if self.pair_generation == "eccb":
-            pair_params = {"d_upper": 16, "d_lower": 1}
-            select_random_pairs = False
-        elif self.pair_generation == "all":
-            pair_params = {"d_upper": np.inf, "d_lower": 1}
-            select_random_pairs = False
+            pair_params["d_upper"] = 16
         elif self.pair_generation == "random":
-            pair_params = {"d_upper": np.inf, "d_lower": 1}
             select_random_pairs = True
 
         self.pairs_train_, self.py_train_, self.pdss_train_ = get_pairs_multiple_datasets(
@@ -318,26 +324,49 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
 
         k = 0
         while k < self.max_iter:
-            if self.debug and (k % 10 == 0):
-                # Validation and training scores
-                self.debug_data_["train_score"].append(self.score(X, y))
-                self.debug_data_["val_score"].append(self.score(X_val, y_val))
-
-                # Objective values
+            if k % 10 == 0:
+                # We evaluate the duality gap every 10'th iteration to check for convergence
                 prim, dual, gap = self._evaluate_primal_and_dual_objective(self.alpha_)
-                self.debug_data_["primal_obj"].append(prim)
-                self.debug_data_["dual_obj"].append(dual)
-                self.debug_data_["duality_gap"].append(gap)
+                if gap < self.duality_gap_threshold:
+                    if self.debug:
+                        self.debug_data_["convergence_criteria"] = "Duality gap lower than threshold: gap %.5f < %.5f" \
+                                                                   % (gap, self.duality_gap_threshold)
+                    break
 
-                # General information about the convergence
-                self.debug_data_["step_size"].append(self._get_step_size_diminishing_3(k))
-                self.debug_data_["step"].append(k)
+                if self.debug and (k % 10 == 0):
+                    # Validation and training scores
+                    self.debug_data_["train_score"].append(self.score(X, y))
+                    self.debug_data_["val_score"].append(self.score(X_val, y_val))
+
+                    # Objective values
+                    self.debug_data_["primal_obj"].append(prim)
+                    self.debug_data_["dual_obj"].append(dual)
+                    self.debug_data_["duality_gap"].append(gap)
+
+                    # General information about the convergence
+                    self.debug_data_["step"].append(k)
 
             s = self._solve_sub_problem(self.alpha_)  # feasible update direction
 
-            tau = self._get_step_size_diminishing_3(k)  # step-width
+            # Get the step-size
+            if self.step_size == "diminishing_1":
+                tau = self._get_step_size_diminishing_1(k, self.C, self.tau_0)
+            elif self.step_size == "diminishing_2":
+                tau = self._get_step_size_diminishing_2(tau) if k > 0 else self.tau_0
+            elif self.step_size == "diminishing_3":
+                tau = self._get_step_size_diminishing_3(k)
+            elif self.step_size == "linesearch":
+                tau = self._get_step_size_linesearch(self.alpha_, s)
 
-            self.alpha_ = self.alpha_ + tau * (s - self.alpha_)
+            if self.debug:
+                self.debug_data_["step_size"].append(tau)
+
+            if tau <= 0:
+                if self.debug:
+                    self.debug_data_["convergence_criteria"] = "%s step-size <= 0 (tau = %.5f)." % (self.step_size, tau)
+                break
+
+            self.alpha_ = self.alpha_ + tau * (s - self.alpha_)  # update alpha^{(k)} --> alpha^{(k + 1)}
 
             self._assert_is_feasible(self.alpha_)
 
@@ -740,19 +769,22 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
 
         return np.round((n * p) / 100).astype("int")
 
+    # ---------------------------------------
+    # STEP SIZE CALCULATION
+    # ---------------------------------------
     @staticmethod
-    def _get_step_size_diminishing(k, C, t_0):
+    def _get_step_size_diminishing_1(k, C, t_0):
         """
         Calculate the step size using the diminishing strategy.
 
-            step size = t_0 / (1 + t_0 * C * (k - 1))
+            step size = t_0 / (1 + t_0 * C * k)
 
             Border cases:
-                k = 1, first iteration: step size = t_0
-                t_0 = 1: step size = 1 / (1 + C * (k - 1))
+                k = 0, first iteration: step size = t_0
+                t_0 = 1: step size = 1 / (1 + C * k)
 
-        :param k: scalar, current iteration
-        :param C: scalar, regularization parameter ranksvm
+        :param k: scalar, current iteration. First iteration is assumed to be k = 0.
+        :param C: scalar, regularization parameter RankSVM
         :param t_0: scalar, initial step-size
         :return: scalar, step size
 
@@ -760,7 +792,7 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
                  Wei Xu, 2011, ArXiv
              [2] "Large-Scale Machine Learning with Stochastic Gradient Descent", Leo Bottou, 2010
         """
-        return t_0 / (1 + t_0 * C * (k - 1))
+        return t_0 / (1 + t_0 * C * k)
 
     @staticmethod
     def _get_step_size_diminishing_2(t):
@@ -776,7 +808,40 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
 
     @staticmethod
     def _get_step_size_diminishing_3(k):
+        """
+        Simple step size only depending on the current iteration. Proposed in [1].
+
+            step size = 2 / (k + 2)
+
+        Ref: [1] "Stochastic Block-Coordinate Frank-Wolfe Optimization for Structural SVMs", Lacoste-Julien et al.,
+                 2012
+        """
         return 2 / (k + 2)
+
+    def _get_step_size_linesearch(self, alpha, s):
+        """
+        Calculate step-size using line-search.
+
+        :param alpha: array-like, shape = (p,), dual variables in step k, before update.
+
+        :param s: array-like, shape = (p,), solution of the sub-problem
+
+        :return: scalar, step-size using line-search
+        """
+        if self.pairwise_features == "exterior_product":
+            raise NotImplementedError("Linea-search currently implemented only for 'difference' features.")
+
+        delta_alpha = s - alpha
+
+        nom = np.sum(delta_alpha) - self._x_AKAt_y(alpha, delta_alpha)
+        den = self._x_AKAt_y(delta_alpha, delta_alpha)
+
+        tau = nom / den
+
+        assert tau <= 1.0
+
+        return tau
+
 
     @staticmethod
     def score_pointwise_using_predictions(y, y_pred, normalize=True):
