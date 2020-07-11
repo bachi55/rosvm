@@ -61,7 +61,7 @@ if __name__ == "__main__":
 
     analyzer = RankSVMAnalyzer([ranksvm1, ranksvm2, ranksvm3, ranksvm4])
 
-    ax = analyzer.plot_objective_functions(add_duality_gap=True, add_dual=True, add_primal=True, use_col=True)
+    ax = analyzer.OLD_plot_objective_functions(add_duality_gap=True, add_dual=True, add_primal=True, use_col=True)
     plt.show()
 
     # plt.figure()

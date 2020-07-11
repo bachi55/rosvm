@@ -196,7 +196,7 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
 
     SOURCE: http://scikit-learn.org/stable/modules/classes.html#module-sklearn.metrics.pairwise
     """
-    def __init__(self, C=1.0, kernel="precomputed", max_iter=1000, gamma=None, coef0=1, degree=3, kernel_params=None,
+    def __init__(self, C=1.0, kernel="precomputed", max_iter=500, gamma=None, coef0=1, degree=3, kernel_params=None,
                  random_state=None, pair_generation="eccb", alpha_threshold=1e-3, pairwise_features="difference",
                  debug=False, step_size="diminishing_1", tau_0=0.5, duality_gap_threshold=1e-3):
 
@@ -279,6 +279,9 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
                 "duality_gap": [],
                 "step_size": [],
                 "step": [],
+                "alpha": [],
+                "norm_s_minus_alpha": [],
+                "n_nonzero_s": [],
                 "convergence_criteria": "max_iter"
             }
         else:
@@ -324,28 +327,7 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
 
         k = 0
         while k < self.max_iter:
-            if k % 10 == 0:
-                # We evaluate the duality gap every 10'th iteration to check for convergence
-                prim, dual, gap = self._evaluate_primal_and_dual_objective(self.alpha_)
-                if gap < self.duality_gap_threshold:
-                    if self.debug:
-                        self.debug_data_["convergence_criteria"] = "Duality gap lower than threshold: gap %.5f < %.5f" \
-                                                                   % (gap, self.duality_gap_threshold)
-                    break
-
-                if self.debug and (k % 10 == 0):
-                    # Validation and training scores
-                    self.debug_data_["train_score"].append(self.score(X, y))
-                    self.debug_data_["val_score"].append(self.score(X_val, y_val))
-
-                    # Objective values
-                    self.debug_data_["primal_obj"].append(prim)
-                    self.debug_data_["dual_obj"].append(dual)
-                    self.debug_data_["duality_gap"].append(gap)
-
-                    # General information about the convergence
-                    self.debug_data_["step"].append(k)
-
+            converged = False
             s = self._solve_sub_problem(self.alpha_)  # feasible update direction
 
             # Get the step-size
@@ -357,13 +339,42 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
                 tau = self._get_step_size_diminishing_3(k)
             elif self.step_size == "linesearch":
                 tau = self._get_step_size_linesearch(self.alpha_, s)
-
-            if self.debug:
-                self.debug_data_["step_size"].append(tau)
+                # if (k > 0) or self.tau_0 is None else self.tau_0
 
             if tau <= 0:
                 if self.debug:
                     self.debug_data_["convergence_criteria"] = "%s step-size <= 0 (tau = %.5f)." % (self.step_size, tau)
+
+                converged = True
+
+            if k % 10 == 0:
+                # We evaluate the duality gap every 10'th iteration to check for convergence
+                prim, dual, gap = self._evaluate_primal_and_dual_objective(self.alpha_)
+
+                if self.debug:
+                    # Validation and training scores
+                    self.debug_data_["train_score"].append(self.score(X, y))
+                    self.debug_data_["val_score"].append(self.score(X_val, y_val))
+
+                    # Objective values
+                    self.debug_data_["primal_obj"].append(prim)
+                    self.debug_data_["dual_obj"].append(dual)
+                    self.debug_data_["duality_gap"].append(gap)
+
+                    # General information about the convergence
+                    self.debug_data_["step"].append(k)
+                    self.debug_data_["step_size"].append(tau)
+                    self.debug_data_["alpha"].append(self.alpha_)
+                    self.debug_data_["norm_s_minus_alpha"].append(np.linalg.norm(s - self.alpha_))
+                    self.debug_data_["n_nonzero_s"].append(np.sum(s > 0))
+
+                if gap < self.duality_gap_threshold:
+                    if self.debug:
+                        self.debug_data_["convergence_criteria"] = "Duality gap lower than threshold: gap %.5f < %.5f" \
+                                                                   % (gap, self.duality_gap_threshold)
+                    converged = True
+
+            if converged:
                 break
 
             self.alpha_ = self.alpha_ + tau * (s - self.alpha_)  # update alpha^{(k)} --> alpha^{(k + 1)}
@@ -576,6 +587,7 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
         prim_obj = wtw / 2 + self.C * sum_xi
 
         dual_obj = np.sum(alpha) - wtw / 2
+        assert prim_obj >= dual_obj
 
         return prim_obj, dual_obj, (prim_obj - dual_obj) / (np.abs(prim_obj) + 1)
 
@@ -833,14 +845,14 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
 
         delta_alpha = s - alpha
 
-        nom = np.sum(delta_alpha) - self._x_AKAt_y(alpha, delta_alpha)
-        den = self._x_AKAt_y(delta_alpha, delta_alpha)
+        tmp = self._x_AKAt_y(delta_alpha)
+
+        nom = np.sum(delta_alpha) - tmp @ alpha
+        den = tmp @ delta_alpha
 
         tau = nom / den
 
-        assert tau <= 1.0
-
-        return tau
+        return np.maximum(np.minimum(1.0, tau), 0.0)
 
 
     @staticmethod
@@ -926,7 +938,7 @@ if __name__ == "__main__":
     mol = data.smiles.values
 
     # Split into training and test
-    train, test = next(GroupKFold(n_splits=3).split(X, y, groups=mol))
+    train, test = next(GroupKFold(n_splits=5).split(X, y, groups=mol))
     print("(n_train, n_test) = (%d, %d)" % (len(train), len(test)))
     assert not (set(mol[train]) & set(mol[test]))
 
@@ -934,8 +946,10 @@ if __name__ == "__main__":
     y_train, y_test = y[train], y[test]
     mol_train = mol[train]
 
-    for feature in ["difference", "exterior_product"]:
-        ranksvm = KernelRankSVC(C=8, kernel="minmax", pair_generation="random", random_state=292, max_iter=1000,
-                                alpha_threshold=1e-2, pairwise_features=feature).fit(X_train, y_train)
+    # for feature in ["difference", "exterior_product"]:
+    for feature in ["difference"]:
+        ranksvm = KernelRankSVC(
+            C=8, kernel="minmax", pair_generation="random", random_state=292, max_iter=1000, alpha_threshold=1e-2,
+            pairwise_features=feature, step_size="diminishing_3").fit(X_train, y_train)
 
         print(feature, ranksvm.score(X_test, y_test))
