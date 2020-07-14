@@ -199,7 +199,7 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
     def __init__(self, C=1.0, kernel="precomputed", max_iter=500, gamma=None, coef0=1, degree=3, kernel_params=None,
                  random_state=None, pair_generation="random", alpha_threshold=1e-3, pairwise_features="difference",
                  debug=False, step_size="linesearch", tau_0=0.5, duality_gap_threshold=1e-2,
-                 convergence_criteria="training_score++"):
+                 conv_criteria="training_score++", duality_gap_threshold_after_training_score_converged=0.3):
 
         # Parameter for the optimization
         self.max_iter = max_iter
@@ -209,11 +209,11 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
                              "'diminishing_3' and 'linesearch'." % self.step_size)
         self.tau_0 = tau_0
         self.duality_gap_threshold = duality_gap_threshold
-        self.duality_gap_threshold_after_training_score_converged = 0.33
-        self.conv_criteria = convergence_criteria
+        self.duality_gap_threshold_after_training_score_converged = duality_gap_threshold_after_training_score_converged
+        self.conv_criteria = conv_criteria
         if self.conv_criteria not in ["max_iter", "duality_gap", "rel_duality_gap_decay", "training_score",
                                       "training_score++"]:
-            raise ValueError("Invalid convergence criteria: '%s'.")
+            raise ValueError("Invalid convergence criteria: '%s'." % self.conv_criteria)
 
         # Kernel parameters
         self.kernel = kernel
@@ -411,11 +411,12 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
                     self.duality_gap_threshold = self.duality_gap_threshold_after_training_score_converged
                     self.conv_criteria = "rel_duality_gap_decay"
                     gap_0 = gap
-                    print("k = %d, Training score does not change much: div = %.5f" % (k, train_score_div))
+                    if self.debug:
+                        print("k = %d, Training score does not change much: div = %.5f" % (k, train_score_div))
 
             if converged:
-                print("Converged:", msg)
                 if self.debug:
+                    print("Converged:", msg)
                     self.debug_data_["convergence_criteria"] = msg
                 break
 
@@ -997,7 +998,7 @@ if __name__ == "__main__":
         ranksvm = KernelRankSVC(
             C=8, kernel="minmax", pair_generation="random", random_state=292, max_iter=500, alpha_threshold=1e-2,
             pairwise_features=feature, step_size="linesearch", debug=True,
-            convergence_criteria="rel_duality_gap_decay", duality_gap_threshold=0.1) \
+            conv_criteria="rel_duality_gap_decay", duality_gap_threshold=0.1) \
             .fit(X_train, y_train)
 
         print(feature, ranksvm.score(X_test, y_test))
