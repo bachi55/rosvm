@@ -34,7 +34,7 @@ from sklearn.metrics.pairwise import pairwise_kernels
 from sklearn.utils.validation import check_random_state
 from sklearn.model_selection import train_test_split
 from collections.abc import Sequence
-from typing import TypeVar
+from typing import TypeVar, Union, Dict
 
 from rosvm.ranksvm.pair_utils import get_pairs_multiple_datasets
 from rosvm.ranksvm.kernel_utils import tanimoto_kernel, minmax_kernel
@@ -197,8 +197,9 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
     SOURCE: http://scikit-learn.org/stable/modules/classes.html#module-sklearn.metrics.pairwise
     """
     def __init__(self, C=1.0, kernel="precomputed", max_iter=500, gamma=None, coef0=1, degree=3, kernel_params=None,
-                 random_state=None, pair_generation="eccb", alpha_threshold=1e-3, pairwise_features="difference",
-                 debug=False, step_size="diminishing_1", tau_0=0.5, duality_gap_threshold=1e-3):
+                 random_state=None, pair_generation="random", alpha_threshold=1e-3, pairwise_features="difference",
+                 debug=False, step_size="linesearch", tau_0=0.5, duality_gap_threshold=1e-2,
+                 convergence_criteria="training_score++"):
 
         # Parameter for the optimization
         self.max_iter = max_iter
@@ -208,6 +209,11 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
                              "'diminishing_3' and 'linesearch'." % self.step_size)
         self.tau_0 = tau_0
         self.duality_gap_threshold = duality_gap_threshold
+        self.duality_gap_threshold_after_training_score_converged = 0.33
+        self.conv_criteria = convergence_criteria
+        if self.conv_criteria not in ["max_iter", "duality_gap", "rel_duality_gap_decay", "training_score",
+                                      "training_score++"]:
+            raise ValueError("Invalid convergence criteria: '%s'.")
 
         # Kernel parameters
         self.kernel = kernel
@@ -321,13 +327,21 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
             self.A_ = self._build_A_matrix(self.pairs_train_, self.py_train_, self.KX_train_.shape[0])
         elif self.pairwise_features == "exterior_product":
             self.P_0_, self.P_1_ = self._build_P_matrices(self.pairs_train_, self.KX_train_.shape[0])
+        else:
+            raise ValueError("Invalid pairwise feature: '%s'. Choices are 'difference' or 'exterior_product'"
+                             % self.pairwise_features)
 
         # Initialize alpha: all dual variables are equal C
         self.alpha_ = np.full(len(self.pairs_train_), fill_value=self.C)  # shape = (n_pairs_train, )
 
+        if self.conv_criteria == "rel_duality_gap_decay":
+            _, _, gap_0 = self._evaluate_primal_and_dual_objective(self.alpha_)
+        elif self.conv_criteria in ["training_score", "training_score++"]:
+            train_score_0 = self.score(X, y)
+
         k = 0
+        converged = False
         while k < self.max_iter:
-            converged = False
             s = self._solve_sub_problem(self.alpha_)  # feasible update direction
 
             # Get the step-size
@@ -340,20 +354,29 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
             elif self.step_size == "linesearch":
                 tau = self._get_step_size_linesearch(self.alpha_, s)
                 # if (k > 0) or self.tau_0 is None else self.tau_0
+            else:
+                raise ValueError("Invalid step-size method: '%s'. Choices are 'diminishing_1', 'diminishing_2', "
+                                 "'diminishing_3' and 'linesearch'." % self.step_size)
 
             if tau <= 0:
-                if self.debug:
-                    self.debug_data_["convergence_criteria"] = "%s step-size <= 0 (tau = %.5f)." % (self.step_size, tau)
-
+                msg = "k = %d, %s step-size <= 0 (tau = %.5f)." % (k, self.step_size, tau)
+                print("Converged:", msg)
                 converged = True
 
-            if k % 10 == 0:
-                # We evaluate the duality gap every 10'th iteration to check for convergence
-                prim, dual, gap = self._evaluate_primal_and_dual_objective(self.alpha_)
+            if ((k % 5 == 0) and (k <= 100)) or ((k % 10 == 0) and (k > 100)):
+                if self.conv_criteria in ["duality_gap", "rel_duality_gap_decay", "training_score++"] or self.debug:
+                    prim, dual, gap = self._evaluate_primal_and_dual_objective(self.alpha_)
+
+                if self.conv_criteria in ["training_score", "training_score++"]:
+                    train_score = self.score(X, y)
+                    train_score_div = train_score / train_score_0
+                    train_score_0 = train_score
+                elif self.debug:
+                    train_score = self.score(X, y)
 
                 if self.debug:
                     # Validation and training scores
-                    self.debug_data_["train_score"].append(self.score(X, y))
+                    self.debug_data_["train_score"].append(train_score)
                     self.debug_data_["val_score"].append(self.score(X_val, y_val))
 
                     # Objective values
@@ -368,13 +391,32 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
                     self.debug_data_["norm_s_minus_alpha"].append(np.linalg.norm(s - self.alpha_))
                     self.debug_data_["n_nonzero_s"].append(np.sum(s > 0))
 
-                if gap < self.duality_gap_threshold:
-                    if self.debug:
-                        self.debug_data_["convergence_criteria"] = "Duality gap lower than threshold: gap %.5f < %.5f" \
-                                                                   % (gap, self.duality_gap_threshold)
+                if k > 0 and self.conv_criteria == "duality_gap" and gap <= self.duality_gap_threshold:
+                    msg = "k = %d, Duality gap below threshold: gap %.5f <= %.5f" % (k, gap, self.duality_gap_threshold)
                     converged = True
 
+                elif k > 0 and self.conv_criteria == "rel_duality_gap_decay" and \
+                        (gap / gap_0) <= self.duality_gap_threshold:
+                    msg = "k = %d, Relative duality gap (to gap_0) below threshold: gap / gap_0 = %.5f <= %.5f" \
+                          % (k, gap / gap_0, self.duality_gap_threshold)
+                    converged = True
+
+                elif k > 0 and self.conv_criteria == "training_score" and \
+                        np.isclose(train_score_div, 1.0, rtol=0, atol=self.duality_gap_threshold):
+                    msg = "k = %d, Training score does not change much: div = %.5f" % (k, train_score_div)
+                    converged = True
+
+                elif k > 0 and self.conv_criteria == "training_score++" and \
+                        np.isclose(train_score_div, 1.0, rtol=0, atol=self.duality_gap_threshold):
+                    self.duality_gap_threshold = self.duality_gap_threshold_after_training_score_converged
+                    self.conv_criteria = "rel_duality_gap_decay"
+                    gap_0 = gap
+                    print("k = %d, Training score does not change much: div = %.5f" % (k, train_score_div))
+
             if converged:
+                print("Converged:", msg)
+                if self.debug:
+                    self.debug_data_["convergence_criteria"] = msg
                 break
 
             self.alpha_ = self.alpha_ + tau * (s - self.alpha_)  # update alpha^{(k)} --> alpha^{(k + 1)}
@@ -460,7 +502,7 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
 
         return Y_pred
 
-    def score(self, X, y, sample_weight=None, return_score_per_dataset=False):
+    def score(self, X, y, sample_weight=None, return_score_per_dataset=False) -> Union[float, Dict]:
         """
         :param X: array-like, tutorial description
             feature-vectors: shape = (n_samples_test, d)
@@ -493,7 +535,7 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
                 values: list, [score, n_test_samples, n_test_pairs]
         """
         if sample_weight:
-            return NotImplementedError("Samples weights in the scoring are currently not supported.")
+            raise NotImplementedError("Samples weights in the scoring are currently not supported.")
 
         rts, dss = zip(*y)
         rts = np.array(rts)
@@ -574,9 +616,11 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
         """
         if self.pairwise_features == "difference":
             predicted_margins_ = self._x_AKAt_y(y=alpha)
-
         elif self.pairwise_features == "exterior_product":
             predicted_margins_ = self._grad_exterior_feat(alpha)
+        else:
+            raise ValueError("Invalid pairwise feature: '%s'. Choices are 'difference' or 'exterior_product'"
+                             % self.pairwise_features)
 
         wtw = alpha @ predicted_margins_
         assert wtw >= 0, "Norm of the primal parameters must be >= 0"
@@ -624,9 +668,11 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
         """
         if self.pairwise_features == "difference":
             predicted_margins_ = self._x_AKAt_y(y=alpha)
-
         elif self.pairwise_features == "exterior_product":
             predicted_margins_ = self._grad_exterior_feat(alpha)
+        else:
+            raise ValueError("Invalid pairwise feature: '%s'. Choices are 'difference' or 'exterior_product'"
+                             % self.pairwise_features)
 
         d = 1 - predicted_margins_  # expected margin - predicted margin = 1 - predicted margin
         s = np.zeros_like(d)
@@ -949,7 +995,9 @@ if __name__ == "__main__":
     # for feature in ["difference", "exterior_product"]:
     for feature in ["difference"]:
         ranksvm = KernelRankSVC(
-            C=8, kernel="minmax", pair_generation="random", random_state=292, max_iter=1000, alpha_threshold=1e-2,
-            pairwise_features=feature, step_size="diminishing_3").fit(X_train, y_train)
+            C=8, kernel="minmax", pair_generation="random", random_state=292, max_iter=500, alpha_threshold=1e-2,
+            pairwise_features=feature, step_size="linesearch", debug=True,
+            convergence_criteria="rel_duality_gap_decay", duality_gap_threshold=0.1) \
+            .fit(X_train, y_train)
 
         print(feature, ranksvm.score(X_test, y_test))
