@@ -70,6 +70,7 @@ def get_scores(joint_model: bool, feature: str):
         n_jobs=N_JOBS)
 
     scores = {ds: [] for ds in y.get_unique_dss()}
+    fittime = {ds: [] for ds in y.get_unique_dss()}
     for train, test in GroupKFold(n_splits=CV_FOLDS).split(X, y, groups=mol):
         X_train, X_test = X[train], X[test]
         y_train, y_test = y[train], y[test]
@@ -77,35 +78,47 @@ def get_scores(joint_model: bool, feature: str):
 
         if joint_model:
             ranksvm = gridseachcv.fit(X_train, y_train, groups=mol_train)
+
             for ds in y_train.get_unique_dss():
                 idc_ds_test = y_test.get_idc_for_ds(ds)
                 scores[ds].append(ranksvm.score(X_test[idc_ds_test], y_test[idc_ds_test]))
+                fittime[ds].append(np.median(ranksvm.cv_results_["mean_fit_time"]))
         else:
             for ds in y_train.get_unique_dss():
                 idc_ds_train = y_train.get_idc_for_ds(ds)
                 idc_ds_test = y_test.get_idc_for_ds(ds)
                 ranksvm = gridseachcv.fit(X_train[idc_ds_train], y_train[idc_ds_train], groups=mol_train[idc_ds_train])
                 scores[ds].append(ranksvm.score(X_test[idc_ds_test], y_test[idc_ds_test]))
+                fittime[ds].append(np.mean(ranksvm.cv_results_["mean_fit_time"]))
 
-    return scores
+    return scores, fittime
+
+
+def write_out(dfs: tuple, fn: str):
+    res = pd.concat(dfs, axis=0, sort=True)
+    res["Model"] = ["single"] * CV_FOLDS + ["joint"] * CV_FOLDS
+    res = res \
+        .groupby("Model") \
+        .aggregate(lambda x: "%.2f (%.2f)" % (np.mean(x), np.std(x))) \
+        .reset_index()
+    print(res)
+
+    res.to_csv(fn, index=False)
 
 
 if __name__ == "__main__":
     # Load dataset
     X, y, mol = read_dataset("./ECCB2018_data.csv")
 
-    # Run scoring for different pairwise features
     for pw_feat in ["difference", "exterior_product"]:
         print(pw_feat)
-        scores_indv = get_scores(False, pw_feat)
-        scores_joint = get_scores(True, pw_feat)
+        scores_indv, fittime_indv = get_scores(False, pw_feat)
+        scores_joint, fittime_joint = get_scores(True, pw_feat)
 
-        res = pd.concat((pd.DataFrame(scores_indv), pd.DataFrame(scores_joint)), axis=0, sort=True)
-        res["Model"] = ["single"] * CV_FOLDS + ["joint"] * CV_FOLDS
-        res = res \
-            .groupby("Model") \
-            .aggregate(lambda x: "%.2f (%.2f)" % (np.mean(x), np.std(x))) \
-            .reset_index()
-        print(res)
+        # Accuracy
+        write_out((pd.DataFrame(scores_indv), pd.DataFrame(scores_joint)),
+                  "./ECCB2018_results__pw_feat=%s__pgen=%s.csv" % (pw_feat, PAIR_GENERATION))
 
-        res.to_csv("./ECCB2018_results__pw_feat=%s__pgen=%s.csv" % (pw_feat, PAIR_GENERATION), index=False)
+        # Fit-time
+        write_out((pd.DataFrame(fittime_indv), pd.DataFrame(fittime_joint)),
+                  "./ECCB2018_fittime__pw_feat=%s__pgen=%s.csv" % (pw_feat, PAIR_GENERATION))
