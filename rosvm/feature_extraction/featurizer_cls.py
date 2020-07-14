@@ -106,8 +106,8 @@ class CircularFPFeaturizer(BaseEstimator, TransformerMixin):
 
     def __len__(self):
         check_is_fitted(self, ["n_bits_"],
-                        "When using frequent substructure sets, the 'fit' function must be called on a set of "
-                        "molecular training structures.")
+                        msg="When using frequent substructure sets, the 'fit' function must be called on a set of "
+                            "molecular training structures.")
 
         return self.n_bits_
 
@@ -142,7 +142,7 @@ class CircularFPFeaturizer(BaseEstimator, TransformerMixin):
         return fp
 
     def _get_fingerprints(self, mols):
-        if not isinstance(mols, list):
+        if not isinstance(mols, list) and not isinstance(mols, np.ndarray):
             raise ValueError("Input must be a list of objects.")
 
         # Calculate the fingerprints
@@ -174,8 +174,8 @@ class CircularFPFeaturizer(BaseEstimator, TransformerMixin):
     def transform(self, mols):
         if self.only_freq_subs:
             check_is_fitted(self, ["n_bits_", "freq_hash_set_", "hash_cnts_filtered_"],
-                            "When using frequent substructure sets, the 'fit' function must be called on a set of "
-                            "molecular training structures.")
+                            msg="When using frequent substructure sets, the 'fit' function must be called on a set of "
+                                "molecular training structures.")
 
         # Calculate fingerprints for the molecules
         fps = self._get_fingerprints(mols)
@@ -196,7 +196,7 @@ class CircularFPFeaturizer(BaseEstimator, TransformerMixin):
                         fps_mat[i, hash] = cnt
 
         if self.return_dense_matrix and (self.n_bits_ <= self.max_n_bits_for_dense_output):
-            fps_mat = fps_mat.todense()
+            fps_mat = fps_mat.toarray()
         else:
             fps_mat = fps_mat.tocsr()
 
