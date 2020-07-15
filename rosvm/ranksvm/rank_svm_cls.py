@@ -198,8 +198,8 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
     """
     def __init__(self, C=1.0, kernel="precomputed", max_iter=500, gamma=None, coef0=1, degree=3, kernel_params=None,
                  random_state=None, pair_generation="random", alpha_threshold=1e-3, pairwise_features="difference",
-                 debug=False, step_size="linesearch", tau_0=0.5, duality_gap_threshold=1e-2,
-                 conv_criteria="training_score++", duality_gap_threshold_after_training_score_converged=0.3):
+                 debug=False, step_size="linesearch", tau_0=0.5, duality_gap_threshold=5e-2,
+                 conv_criteria="rel_duality_gap_decay", duality_gap_threshold_after_training_score_converged=0.5):
 
         # Parameter for the optimization
         self.max_iter = max_iter
@@ -363,16 +363,16 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
                 print("Converged:", msg)
                 converged = True
 
-            if ((k % 5 == 0) and (k <= 100)) or ((k % 10 == 0) and (k > 100)):
+            if ((k % 10 == 0) and (k <= 100)) or ((k % 20 == 0) and (k > 100)):
                 if self.conv_criteria in ["duality_gap", "rel_duality_gap_decay", "training_score++"] or self.debug:
                     prim, dual, gap = self._evaluate_primal_and_dual_objective(self.alpha_)
 
                 if self.conv_criteria in ["training_score", "training_score++"]:
-                    train_score = self.score(X, y)
+                    train_score = self.score(self.KX_train_, y, X_is_kernel_input=True)
                     train_score_div = train_score / train_score_0
                     train_score_0 = train_score
                 elif self.debug:
-                    train_score = self.score(X, y)
+                    train_score = self.score(self.KX_train_, y, X_is_kernel_input=True)
 
                 if self.debug:
                     # Validation and training scores
@@ -426,6 +426,8 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
 
             k += 1
 
+        print(k, self.C)
+
         # Threshold dual variables to the boarder ranges, if there are very close to it.
         self.alpha_ = self._bound_alpha(self.alpha_, self.alpha_threshold, 0, self.C)
         self._assert_is_feasible(self.alpha_)
@@ -447,7 +449,7 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
 
         return self
 
-    def predict_pointwise(self, X):
+    def predict_pointwise(self, X, X_is_kernel_input=False):
         """
         Calculates the RankSVM preference score < w , phi_i > for a set of examples.
 
@@ -463,16 +465,16 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
         if self.pairwise_features == "exterior_product":
             raise ValueError("Pointwise prediction is only possible for the 'difference' pairwise-features.")
 
-        X = self._get_test_kernel(X)
+        X = self._get_test_kernel(X, X_is_kernel_input=X_is_kernel_input)
 
         wtx = (X @ (self.A_.T @ self.alpha_)).flatten()  # shape = (n_test, )
         assert wtx.shape == (len(X),)
 
         return wtx
 
-    def predict(self, X, return_margin=True):
+    def predict(self, X, return_margin=True, X_is_kernel_input=False):
         if self.pairwise_features == "difference":
-            wtx = self.predict_pointwise(X)
+            wtx = self.predict_pointwise(X, X_is_kernel_input=X_is_kernel_input)
             Y_pred = wtx[:, np.newaxis] - wtx[np.newaxis, :]  # shape = (n_samples, n_samples)
         elif self.pairwise_features == "exterior_product":
             X = self._get_test_kernel(X).T  # shape = (n_train, n_test)
@@ -503,7 +505,8 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
 
         return Y_pred
 
-    def score(self, X, y, sample_weight=None, return_score_per_dataset=False) -> Union[float, Dict]:
+    def score(self, X, y, sample_weight=None, return_score_per_dataset=False, X_is_kernel_input=False) \
+            -> Union[float, Dict]:
         """
         :param X: array-like, tutorial description
             feature-vectors: shape = (n_samples_test, d)
@@ -521,8 +524,11 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
 
         :param sample_weight: parameter currently not used.
 
-        :param return_score_per_dataset: boolean, indicating whether instead of an average score across
-            all datasets separate scores are returned.
+        :param return_score_per_dataset: boolean, indicating whether separate scores for each dataset are returned.
+            If False, the average score across all datasets is returned.
+
+        :param X_is_kernel_input: boolean, indicating the input X should be interpreted as kernel matrix. This 
+            overwrites the class parameter 'kernel'.
 
         :return:
             scalar, pairwise prediction accuracy separately calculated for all provided
@@ -546,7 +552,7 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
         for ds in set(dss):  # get unique datasets
             # Calculate the score for each dataset individually
             Y = np.sign(rts[dss == ds][:, np.newaxis] - rts[dss == ds][np.newaxis, :])
-            Y_pred = self.predict(X[dss == ds])
+            Y_pred = self.predict(X[dss == ds], X_is_kernel_input=X_is_kernel_input)
             scr, ntp = self.score_pairwise_using_prediction(Y, Y_pred)
             scores[ds] = [scr, np.sum(dss == ds).item(), ntp]
 
@@ -561,8 +567,8 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
 
         return out
 
-    def _get_test_kernel(self, X):
-        if self.kernel == "precomputed":
+    def _get_test_kernel(self, X, X_is_kernel_input=False):
+        if X_is_kernel_input or self.kernel == "precomputed":
             if not X.shape[1] == self.KX_train_.shape[0]:
                 raise ValueError("Test-train kernel must have as many columns as training examples.")
         else:
@@ -998,7 +1004,7 @@ if __name__ == "__main__":
         ranksvm = KernelRankSVC(
             C=8, kernel="minmax", pair_generation="random", random_state=292, max_iter=500, alpha_threshold=1e-2,
             pairwise_features=feature, step_size="linesearch", debug=True,
-            conv_criteria="rel_duality_gap_decay", duality_gap_threshold=0.1) \
+            conv_criteria="training_score++", duality_gap_threshold=0.01) \
             .fit(X_train, y_train)
 
         print(feature, ranksvm.score(X_test, y_test))
