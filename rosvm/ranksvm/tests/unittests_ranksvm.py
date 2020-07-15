@@ -221,6 +221,51 @@ class TestPairwiseScoringFunction(unittest.TestCase):
             Y = self.make_Y_matrix(y)
             Y_pred = self.make_Y_matrix(y_pred)
 
+            perf_pair, _ = KernelRankSVC().score_pairwise_using_prediction_SLOW(Y, Y_pred)
+            perf_point, _ = KernelRankSVC().score_pointwise_using_predictions(y, y_pred)
+
+            np.testing.assert_allclose(perf_pair, perf_point)
+
+    def test_corner_cases(self):
+        Y = self.make_Y_matrix(np.array([1, 3, 3, 4, 2]))
+
+        Y_pred = self.make_Y_matrix(np.array([-4, 5, 5, 7, 1]))
+        perf, n_test_pairs = KernelRankSVC().score_pairwise_using_prediction_SLOW(Y, Y_pred)
+        self.assertEqual(perf, 1.0)
+        self.assertEqual(n_test_pairs, 9)
+
+        Y_pred = self.make_Y_matrix(np.array([-4, 8, 5, 7, 1]))
+        perf, n_test_pairs = KernelRankSVC().score_pairwise_using_prediction_SLOW(Y, Y_pred)
+        self.assertEqual(perf, 8.0 / 9.0)
+
+        Y_pred = self.make_Y_matrix(np.array([-4, 8, 7, 7, 1]))
+        perf, _ = KernelRankSVC().score_pairwise_using_prediction_SLOW(Y, Y_pred)
+        self.assertEqual(perf, 7.5 / 9.0)
+
+        Y_pred = self.make_Y_matrix(np.array([10, 8, 7, 6, 9]))
+        perf, _ = KernelRankSVC().score_pairwise_using_prediction_SLOW(Y, Y_pred)
+        self.assertEqual(perf, 0.0)
+
+        Y_pred = self.make_Y_matrix(np.array([10, 10, 10, 10, 10]))
+        perf, _ = KernelRankSVC().score_pairwise_using_prediction_SLOW(Y, Y_pred)
+        self.assertEqual(perf, 0.5)
+
+
+class TestVectorizedPairwiseScoringFunction(unittest.TestCase):
+    @staticmethod
+    def make_Y_matrix(y):
+        return y[:, np.newaxis] - y[np.newaxis, :]
+
+    def test_random_prediction_against_pointwise_scoring(self):
+        rs = np.random.RandomState(767)
+
+        for i in range(25):
+            y = rs.random(100)
+            y_pred = rs.random(100)  # Predicted pseudo-scores
+
+            Y = self.make_Y_matrix(y)
+            Y_pred = self.make_Y_matrix(y_pred)
+
             perf_pair, _ = KernelRankSVC().score_pairwise_using_prediction(Y, Y_pred)
             perf_point, _ = KernelRankSVC().score_pointwise_using_predictions(y, y_pred)
 
@@ -249,6 +294,7 @@ class TestPairwiseScoringFunction(unittest.TestCase):
         Y_pred = self.make_Y_matrix(np.array([10, 10, 10, 10, 10]))
         perf, _ = KernelRankSVC().score_pairwise_using_prediction(Y, Y_pred)
         self.assertEqual(perf, 0.5)
+
 
 
 class TestDualGradients(unittest.TestCase):

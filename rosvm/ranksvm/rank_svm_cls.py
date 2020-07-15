@@ -198,8 +198,8 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
     """
     def __init__(self, C=1.0, kernel="precomputed", max_iter=500, gamma=None, coef0=1, degree=3, kernel_params=None,
                  random_state=None, pair_generation="random", alpha_threshold=1e-3, pairwise_features="difference",
-                 debug=False, step_size="linesearch", tau_0=0.5, duality_gap_threshold=5e-2,
-                 conv_criteria="rel_duality_gap_decay", duality_gap_threshold_after_training_score_converged=0.5):
+                 debug=False, step_size="diminishing_3", tau_0=0.5, duality_gap_threshold=5e-2,
+                 conv_criteria="training_score++", duality_gap_threshold_after_training_score_converged=0.5):
 
         # Parameter for the optimization
         self.max_iter = max_iter
@@ -426,8 +426,6 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
 
             k += 1
 
-        print(k, self.C)
-
         # Threshold dual variables to the boarder ranges, if there are very close to it.
         self.alpha_ = self._bound_alpha(self.alpha_, self.alpha_threshold, 0, self.C)
         self._assert_is_feasible(self.alpha_)
@@ -446,6 +444,8 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
 
         if self.debug:
             self.debug_data_ = {key: np.array(value) for key, value in self.debug_data_.items()}
+
+        self.k_ = k
 
         return self
 
@@ -477,7 +477,7 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
             wtx = self.predict_pointwise(X, X_is_kernel_input=X_is_kernel_input)
             Y_pred = wtx[:, np.newaxis] - wtx[np.newaxis, :]  # shape = (n_samples, n_samples)
         elif self.pairwise_features == "exterior_product":
-            X = self._get_test_kernel(X).T  # shape = (n_train, n_test)
+            X = self._get_test_kernel(X, X_is_kernel_input=X_is_kernel_input).T  # shape = (n_train, n_test)
 
             # Get all pairs between all test examples. For those we wanna predict_pointwise the order.
             n_samples_test = X.shape[1]
@@ -552,7 +552,7 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
         for ds in set(dss):  # get unique datasets
             # Calculate the score for each dataset individually
             Y = np.sign(rts[dss == ds][:, np.newaxis] - rts[dss == ds][np.newaxis, :])
-            Y_pred = self.predict(X[dss == ds], X_is_kernel_input=X_is_kernel_input)
+            Y_pred = self.predict(X[dss == ds], X_is_kernel_input=X_is_kernel_input, return_margin=False)
             scr, ntp = self.score_pairwise_using_prediction(Y, Y_pred)
             scores[ds] = [scr, np.sum(dss == ds).item(), ntp]
 
@@ -940,7 +940,7 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
         return tp, n_decisions
 
     @staticmethod
-    def score_pairwise_using_prediction(Y, Y_pred, normalize=True):
+    def score_pairwise_using_prediction_SLOW(Y, Y_pred, normalize=True):
         """
         :param Y: array-like, shape = (n_samples, n_samples), pairwise object preference
 
@@ -979,16 +979,76 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
 
         return tp, n_decisions
 
+    @staticmethod
+    def score_pairwise_using_prediction(Y, Y_pred, normalize=True):
+        """
+        :param Y: array-like, shape = (n_samples, n_samples), pairwise object preference
 
-if __name__ == "__main__":
-    import pandas as pd
+        :param Y_pred: array-like, shape = (n_samples, n_samples), pairwise object preference prediction
+
+        :param normalize: logical, indicating whether the number of correctly classified pairs
+            should be normalized by the total number of pairs (n_pairs_test).
+
+        :return: tuple(scalar, scalar), pairwise prediction accuracy and number of test pairs used
+        """
+        assert Y.shape == Y_pred.shape, "True and predicted label matrices must have the same size."
+        assert Y.shape[0] == Y.shape[1], "Label matrix must be squared."
+        assert np.all(np.diag(Y) == 0), "Assume that the diagonal labels are: Is i preferred over i?"
+        assert np.all(np.diag(Y_pred) == 0), "Assume that the diagonal labels are: Is i preferred over i?"
+        assert np.all(Y == - Y.T), "Assume anti-symmetric relation"
+        assert np.all(Y_pred == - Y_pred.T), "Predicted relations must be anti-symmetric"
+
+        r_c = np.where(Y < 0)  # i is preferred over j
+        n_decisions = len(r_c[0])
+        if n_decisions == 0:
+            raise RuntimeError("Score is undefined of all true target values are equal.")
+
+        tp = np.sum(Y_pred[r_c] == 0) / 2  # ties predicted
+        tp += np.sum(Y_pred[r_c] < 0)  # i is _predicted_ to be preferred over j
+
+        if normalize:
+            tp /= n_decisions
+
+        return tp, n_decisions
+
+
+def runtime(X, y, n_rep=7):
+    from time import time
     from sklearn.model_selection import GroupKFold
 
-    # Load example data
-    data = pd.read_csv("tutorial/example_data.csv", sep="\t")
-    X = np.array(list(map(lambda x: x.split(","), data.substructure_count.values)), dtype="float")
-    y = Labels(data.rt.values, data.dataset.values)
-    mol = data.smiles.values
+    for conv_criteria, step_size, duality_gap_threshold in [("max_iter", "diminishing_3", 0.01),
+                                                            ("rel_duality_gap_decay", "diminishing_3", 0.05),
+                                                            ("rel_duality_gap_decay", "linesearch", 0.05),
+                                                            ("training_score++", "diminishing_3", 0.05),
+                                                            ("training_score++", "linesearch", 0.05)]:
+        t_min = np.inf
+        t_mean = 0
+        k = 0
+        s = 0
+
+        for rep, (train, test) in enumerate(GroupKFold(n_splits=n_rep).split(X, y, groups=mol)):
+            X_train, X_test = X[train], X[test]
+            y_train, y_test = y[train], y[test]
+
+            start = time()
+            ranksvm = KernelRankSVC(C=1, kernel="minmax", pair_generation="random", random_state=2921, max_iter=500,
+                                    alpha_threshold=1e-2, step_size=step_size, conv_criteria=conv_criteria,
+                                    duality_gap_threshold=duality_gap_threshold).fit(X_train, y_train)
+            end = time()
+            t_min = np.minimum(t_min, end - start)
+            t_mean += (end - start)
+            k += ranksvm.k_
+            s += ranksvm.score(X_test, y_test)
+
+        print((conv_criteria, step_size),
+              "\tmin_fittime=%.2fs" % t_min,
+              "\tmean_fittime=%.2fs" % (t_mean / n_rep),
+              "\titer=%.2f" % (k / n_rep),
+              "\tscore=%.3f" % (s / n_rep))
+
+
+def scoring(X, y, mol):
+    from sklearn.model_selection import GroupKFold
 
     # Split into training and test
     train, test = next(GroupKFold(n_splits=5).split(X, y, groups=mol))
@@ -997,14 +1057,25 @@ if __name__ == "__main__":
 
     X_train, X_test = X[train], X[test]
     y_train, y_test = y[train], y[test]
-    mol_train = mol[train]
 
-    # for feature in ["difference", "exterior_product"]:
-    for feature in ["difference"]:
+    for feature in ["difference", "exterior_product"]:
         ranksvm = KernelRankSVC(
             C=8, kernel="minmax", pair_generation="random", random_state=292, max_iter=500, alpha_threshold=1e-2,
-            pairwise_features=feature, step_size="linesearch", debug=True,
-            conv_criteria="training_score++", duality_gap_threshold=0.01) \
+            pairwise_features=feature, step_size="diminishing_3", debug=True,
+            conv_criteria="max_iter", duality_gap_threshold=0.01) \
             .fit(X_train, y_train)
 
-        print(feature, ranksvm.score(X_test, y_test))
+        print(feature, "%.5f" % ranksvm.score(X_test, y_test))
+
+
+if __name__ == "__main__":
+    import pandas as pd
+
+    # Load example data
+    data = pd.read_csv("tutorial/ECCB2018_data.csv", sep="\t")
+    X = np.array(list(map(lambda x: x.split(","), data.substructure_count.values)), dtype="float")
+    y = Labels(data.rt.values, data.dataset.values)
+    mol = data.smiles.values
+
+    runtime(X, y)
+
