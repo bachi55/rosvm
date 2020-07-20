@@ -130,7 +130,7 @@ Here, $\mathbf{D}_\mathbf{y}\in\mathbb{R}^{\numpair\times\numpair}$ is a diagona
         $\mathbf{s}\leftarrow\underset{\mathbf{s}'\in\mathcal{A}}{\arg\max}\,
             \left\langle\nabla g(\balpha^{(k)}),\mathbf{s}'\right\rangle$
             \tcc*{Solve sub-problem}
-        $\gamma\leftarrow\frac{2}{k+2}$\tcc*{Step-size; also line-search possible}
+        $\gamma^{(k)}\leftarrow\frac{2}{k+2}$\tcc*{Step-size; also line-search possible}
         $\balpha^{(k+1)}\leftarrow(1-\gamma)\balpha^{(k)}+\gamma\mathbf{s}$\tcc*{Update}
     }
     $\balpha^*\leftarrow\balpha^{(K)}$\;
@@ -159,6 +159,33 @@ Eq.~\eqref{eq:sub_problem} can be solved by simply evaluating $\mathbf{d}$ and s
 \begin{mdframed}[style=codeframe]
     The function '\texttt{\_solve\_sub\_problem}' implements the sub problem solver.
 \end{mdframed}
+
+\paragraph{Line-search:}
+The optimal step-size $\gamma^{(k)}$ can be determined by solving an univariate problem:
+\begin{equation}
+    \gamma^{(k)}=\underset{\gamma\in[0,1]}{\max}\quad g\left(\balpha^{(k)}-\gamma\left(\mathbf{s}-\balpha^{(k)}\right)\right).
+    \label{eq:linesearch_problem}
+\end{equation}
+For that, we set the derivative of \eqref{eq:linesearch_problem} to zero: 
+\begin{align}
+    &\frac{\partial g\left(\balpha^{(k)}-\gamma\left(\mathbf{s}-\balpha^{(k)}\right)\right)}{\partial\gamma}\\
+        &=\left(\balpha^{(k)}-\gamma\left(\mathbf{s}-\balpha^{(k)}\right)\right)^T\mathbf{A}\mathbf{K}\mathbf{A}^T\left(\mathbf{s}-\balpha^{(k)}\right)-\bones^T\left(\mathbf{s}-\balpha^{(k)}\right)\\
+        &=\left(\balpha^{(k)}\right)^T\mathbf{A}\mathbf{K}\mathbf{A}^T\left(\mathbf{s}-\balpha^{(k)}\right)
+            -\gamma\left(\mathbf{s}-\balpha^{(k)}\right)^T\mathbf{A}\mathbf{K}\mathbf{A}^T\left(\mathbf{s}-\balpha^{(k)}\right)
+            -\bones^T\left(\mathbf{s}-\balpha^{(k)}\right)\\
+        &=0
+\end{align}
+and solve for $\gamma$:
+\begin{align}
+    \gamma
+    &=\left(\balpha^{(k)}\right)^T\mathbf{A}\mathbf{K}\mathbf{A}^T\left(\mathbf{s}-\balpha^{(k)}\right)
+            -\bones^T\left(\mathbf{s}-\balpha^{(k)}\right)\\
+    \Leftrightarrow\\
+    \gamma&=\frac{\left(\balpha^{(k)}\right)^T\mathbf{A}\mathbf{K}\mathbf{A}^T\left(\mathbf{s}-\balpha^{(k)}\right)
+            -\bones^T\left(\mathbf{s}-\balpha^{(k)}\right)}{\left(\mathbf{s}-\balpha^{(k)}\right)^T\mathbf{A}\mathbf{K}\mathbf{A}^T\left(\mathbf{s}-\balpha^{(k)}\right)}\\
+    \gamma&=\frac{\left\langle\nabla g\left(\balpha^{(k)}\right),\left(\mathbf{s}-\balpha^{(k)}\right)\right\rangle}{\left(\mathbf{s}-\balpha^{(k)}\right)^T\mathbf{A}\mathbf{K}\mathbf{A}^T\left(\mathbf{s}-\balpha^{(k)}\right)}
+           =\frac{\left\langle\mathbf{d},\left(\mathbf{s}-\balpha^{(k)}\right)\right\rangle}{\left(\mathbf{s}-\balpha^{(k)}\right)^T\mathbf{A}\mathbf{K}\mathbf{A}^T\left(\mathbf{s}-\balpha^{(k)}\right)}\\
+\end{align}
 
 
 % \section{Notation}
