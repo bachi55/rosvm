@@ -1,0 +1,301 @@
+\documentclass{article}
+\usepackage[utf8]{inputenc}
+\usepackage[english]{babel}
+
+\usepackage[backend=biber,%
+            style=numeric-comp,     % how it appears in the literature overview
+            citestyle=numeric-comp, % how it appears when citing in the text 
+            maxnames=1]{biblatex}
+\addbibresource{bibliography.bib} %Imports bibliography file
+
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{mathtools}
+\mathtoolsset{showonlyrefs=true}  % only number equations that have been references in the text (set 'false' to number all)
+
+
+\usepackage[framemethod=TikZ]{mdframed}
+\usepackage{xcolor}
+
+
+\usepackage{booktabs}
+\usepackage{url} 
+\usepackage{adjustbox}
+\usepackage[ruled,linesnumbered]{algorithm2e}
+
+\usepackage{pdflscape}
+\usepackage{hyperref}
+\usepackage{tabularx}
+
+\frenchspacing % No double spacing between sentences
+\linespread{1.2} % Set linespace
+\usepackage[a4paper, lmargin=0.1666\paperwidth, rmargin=0.1666\paperwidth, tmargin=0.1111\paperheight, bmargin=0.1111\paperheight]{geometry} %margins
+
+
+\newcommand{\st}{\text{s.t.}}
+\newcommand{\defi}{:=}
+\newcommand{\balpha}{\boldsymbol{\alpha}}
+\newcommand{\bones}{\mathbf{1}}
+\newcommand{\numexp}{n}
+\newcommand{\numpair}{m}
+\DeclareMathOperator{\sign}{sign}
+
+
+\mdfdefinestyle{codeframe}{%
+    linecolor=black,
+    outerlinewidth=0.5pt,
+    roundcorner=0pt,
+    innertopmargin=\baselineskip,
+    innerbottommargin=\baselineskip,
+    innerrightmargin=20pt,
+    innerleftmargin=20pt,
+    backgroundcolor=gray!20!white}
+
+
+\title{ROSVM Package - Mathematical Background}
+\author{Eric Bach}
+
+\begin{document}
+
+\maketitle
+
+\section{ToDo}
+
+\begin{itemize}
+    \item Add derivations for the exterior product features.
+\end{itemize}
+
+\section{Introduction}
+
+This documents describes the mathematical background of the Ranking Support Vector Machine (RankSVM) \parencite{Joachims2002} implemented in the ROSVM package. 
+
+\section{Method}
+
+\subsection{Notation}
+\begin{table}[t]
+    \centering
+    \caption{Notation table}
+    \label{tab:notations}
+    \begin{tabular}{ll}
+        \toprule 
+        {\bf Notation} & {\bf Description} \\ \midrule
+        $\mathcal{P}$ & Set of preferences \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\subsection{Ranking Support Vector Machine (RankSVM)}
+
+The RankSVM's primal optimization problem is given as: 
+\begin{equation}
+\begin{split}
+    \underset{\mathbf{w},\boldsymbol{\xi}}{min} 
+        &\quad f(\mathbf{w},\boldsymbol{\xi}) = \frac{1}{2}\|\mathbf{w}\|^2 + C\sum_{(i,j)\in P}\xi_{ij} \\
+    \st &\quad y_{ij}\mathbf{w}^T(\phi_i-\phi_j)\geq 1-\xi_{ij},\quad\forall(i,j)\in\mathcal{P}\\
+        &\quad \xi_{ij} \geq 0,\quad\forall(i,j)\in\mathcal{P},
+    \label{eq:RankSVM_primal_problem}
+\end{split}
+\end{equation}
+where $C>0$ is the regularization parameter. We define the pairwise labels as the retention time difference of the corresponding molecules, i.e. $y_{ij}\defi\sign(t_i-t_j)$. From the primal problem in Eq.~\eqref{eq:RankSVM_primal_problem} we can derive the following dual optimization problem:
+\begin{equation}
+\begin{split}
+    \underset{\balpha}{\max} 
+        &\quad g(\balpha) = \bones^T\balpha - \frac{1}{2} \balpha^T\left(\mathbf{y}\mathbf{y}^T\circ\mathbf{B}\mathbf{K}\mathbf{B}^T\right)\balpha \\ 
+    \st &\quad 0\leq\alpha_{ij}\leq C,\quad\forall (i,j)\in \mathcal{P},
+    \label{eq:RankSVM_dual_problem}
+\end{split}
+\end{equation}
+where $\mathbf{y}\in\mathbb{R}^\numexp$ is the vector of pairwise labels, and $\mathbf{B}\in\{-1,0,1\}^{\numpair\times\numexp}$ with row $p=(i,j)$ being $[\mathbf{B}]_{p\cdot}=(0,\ldots,0,\underbrace{1}_{i},0,\ldots,0,\underbrace{-1}_{j},0,\ldots,0)$. For further details refer to the work by \cite{Kuo2014}. Using the properties of the Hadamard product $\circ$ we can reformulate the function $g(\balpha)$ of the problem in Eq.~\eqref{eq:RankSVM_dual_problem} \parencite{Styan1973}:
+\begin{align}
+    g(\balpha) 
+        &= \bones^T\balpha-\frac{1}{2} \balpha^T\left(\mathbf{y}\mathbf{y}^T\circ\mathbf{B}\mathbf{K}\mathbf{B}^T\right)\balpha \\
+        &= \bones^T\balpha-\frac{1}{2} \balpha^T\left(\mathbf{D}_\mathbf{y}\mathbf{B}\mathbf{K}\mathbf{B}^T\mathbf{D}_\mathbf{y}\right)\balpha \\
+        &= \bones^T\balpha-\frac{1}{2} \balpha^T\mathbf{A}\mathbf{K}\mathbf{A}^T\balpha.
+\end{align}
+Here, $\mathbf{D}_\mathbf{y}\in\mathbb{R}^{\numpair\times\numpair}$ is a diagonal matrix storing the pairwise labels, and $\mathbf{A}\defi\mathbf{D}_\mathbf{y}\mathbf{B}\in\{-1,0,1\}^{\numpair\times\numexp}$. The matrix $\mathbf{A}$ now contains the pairwise labels as well by multiplying each row $p=(i,j)$ of $\mathbf{B}$ with $y_{ij}$, i.e. $[\mathbf{A}]_{p\cdot}=y_{ij}\cdot(0,\ldots,0,\underbrace{1}_{i},0,\ldots,0,\underbrace{-1}_{j},0,\ldots,0)$. 
+\begin{mdframed}[style=codeframe]
+    Check out '\texttt{\_build\_A\_matrix}' for the actual implementation of the $\mathbf{A}$-matrix construction from the data.
+\end{mdframed}
+
+\subsubsection{Optimizing the RankSVM Model Parameters}
+
+% \begin{figure}[t]
+%     \centering
+\begin{algorithm}[t]
+    \label{alg:frank-wolfe}
+    \SetAlgoLined 
+    \caption{Conditional gradient algorithm}
+    Let $\balpha^{(0)}\in\mathcal{A}$\tcc*{A feasible initial dual variable.}
+    \For{$k=0,\ldots,(K-1)$}{
+        $\mathbf{s}\leftarrow\underset{\mathbf{s}'\in\mathcal{A}}{\arg\max}\,
+            \left\langle\nabla g(\balpha^{(k)}),\mathbf{s}'\right\rangle$
+            \tcc*{Solve sub-problem}
+        $\gamma\leftarrow\frac{2}{k+2}$\tcc*{Step-size; also line-search possible}
+        $\balpha^{(k+1)}\leftarrow(1-\gamma)\balpha^{(k)}+\gamma\mathbf{s}$\tcc*{Update}
+    }
+    $\balpha^*\leftarrow\balpha^{(K)}$\;
+\end{algorithm}
+% \end{figure}
+
+We find the optimal RankSVM model $\balpha^*$ in the dual space given a training dataset $\mathcal{D}=\{(x_i,t_i)\}_{i=1}^\numexp$ using the conditional gradient algorithm \parencite{Jaggi2013}. The algorithm is shown in \ref{alg:frank-wolfe}. The feasible set is defined as $\mathcal{A}\defi\{\balpha\in\mathbb{R}^\numpair\,|\,0\leq\alpha_{ij}\leq C,\forall (i,j)\in\mathcal{P}\}$ which follows from the constraints of the dual optimization problem in Eq.~\eqref{eq:RankSVM_dual_problem}. Note that $\mathcal{A}$ is compact convex set.
+\begin{mdframed}[style=codeframe]
+    The function '\texttt{\_assert\_is\_feasible}' implements the feasibility check for a given $\balpha^{(k)}$ iterate.
+\end{mdframed}
+
+\paragraph{Solving the Sub-problem:}
+In each iteration of Algorithm~\ref{alg:frank-wolfe} we need to solve the following linear optimization problem:
+\begin{align}
+    \mathbf{s}
+        &=\underset{\mathbf{s}'\in\mathcal{A}}{\arg\max}\,\left\langle\nabla g(\balpha^{(k)}),\mathbf{s}'\right\rangle\\
+        &=\underset{\mathbf{s}'\in\mathcal{A}}{\arg\max}\,\left\langle\underbrace{\bones-\mathbf{A}\mathbf{K}\mathbf{A}^T\balpha^{(k)}}_{\defi\mathbf{d}},\mathbf{s}'\right\rangle.\label{eq:sub_problem}
+\end{align}
+Eq.~\eqref{eq:sub_problem} can be solved by simply evaluating $\mathbf{d}$ and subsequently setting the components of $s\in\mathbb{R}^{\numpair}$ as:
+\begin{equation}
+    s_{ij}=\begin{cases}
+            C&\text{if }d_{ij}>0\\
+            0&\text{else}.
+           \end{cases}
+\end{equation}
+\begin{mdframed}[style=codeframe]
+    The function '\texttt{\_solve\_sub\_problem}' implements the sub problem solver.
+\end{mdframed}
+
+
+% \section{Notation}
+% \begin{itemize}
+%     \item $m_i\in\molspace$ molecule and $t_i\in\mathbb{R}$ its retention time
+%     \item $\mathbf{x}_i\in\mathbb{R}^d$ representation of the molecule $m_i$ with dimension $d$
+%     \item $\phi(\mathbf{x}_i)=\phi_i$ is the \emph{feature} representation of a molecule $m_i$
+%     \item $\phi:\mathbb{R}^d\mapsto\mathcal{F}_x$ feature map 
+%     \item $\{(\mathbf{x}_i,t_i)\}_{i=1}^{\ell}$ training dataset of (molecule representation, retention-time)-tuples
+%     \item We say $m_i$ elutes before $m_j$ ($m_i\elutesbefore m_j$) if $t_i < t_j$.
+%     \item $\Phi\in\mathbb{R}^{\ell\times|\mathcal{F}_x|}$, matrix storing the molecules' feature representations $\phi_i$ row-wise
+% \end{itemize}
+% 
+% \section{Conditional gradient descent}
+% 
+% I am using the conditional gradient algorithm\cite{Ouyang2010,Jaggi2013} to train the Ranking Support-Vector-Machine (RankSVM) using its dual representation. The algorithm is shown in Table~\ref{alg:conditional-gradient}.
+% 
+% \begin{table}[h]
+%     \centering
+%     \caption{Conditional Gradient or Frank-Wolfe algorithm. We consider maximizing the function $g$ here, so $\text{argmin}$ becomes $\text{argmax}$ here.}
+%     \label{alg:conditional-gradient}
+% \begin{tabular}{ll}
+%     \toprule
+%     \multicolumn{2}{l}{\textbf{Input:} $\balpha^{(0)}\in\domain$ (solution in feasible set / domain), $k=0$}\\ \midrule
+%     \textbf{repeat} & \\
+%     1. & $\mathbf{s} = \underset{\mathbf{s}\in\domain}{\text{argmax}}\,\nabla g(\balpha^{(k)})^T\mathbf{s}$ \\
+%     2. & Determine a step size $t$ for iteration $k$ \\
+%     3. & \textbf{quit} if $t\leq 0$ \\
+%     4. & Update $\balpha^{(k+1)}=(1-t)\balpha^{(k)}+t\mathbf{s}$ \\
+%     \textbf{until} & stopping criterion is satisfied \\
+%     \bottomrule
+% \end{tabular}
+% \end{table}
+% 
+% 
+% \section{RankSVM with Slack Variable for each Training Pair}
+% 
+% \subsection{Optimization problem}
+% 
+% \paragraph{Primal}
+% 
+% The rankSVM is expressed by the following optimization primal problem:
+% 
+% \begin{align}
+%     \underset{\mathbf{w},\mathbf{\xi}}{min} &\quad \frac{1}{2}\|\mathbf{w}\|_2^2 + C\sum_{(i,j)\in P}\xi_{ij} \\
+%     \st &\quad \mathbf{w}^T(\phi_j-\phi_i)\geq 1-\xi_{ij}, \forall(i,j)\in\pref\label{prob:rankSVM-primal}\\
+%         &\quad \xi_{ij} \geq 0, \forall(i,j)\in\pref,
+% \end{align}                
+% 
+% where $C>0$ is the regularization parameter, and $\pref=\{(i,j)\,|\,m_i\elutesbefore m_j\}$. The optimization problem \eqref{prob:rankSVM-primal} learns a model $\mathbf{w}$ such that:
+%     
+% \begin{align}
+%                     &\quad\mathbf{w}^T(\phi_j-\phi_i) > 0 \\
+%     \Leftrightarrow &\quad\mathbf{w}^T\phi_j - \mathbf{w}^T\phi_i > 0 \\ \label{eq:pairwise_ordering_function}
+%     \Leftrightarrow &\quad\mathbf{w}^T\phi_j > \mathbf{w}^T\phi_i ,\quad\text{ if } (i,j)\in\pref 
+% \end{align}      
+% 
+% and therefore induces a general ordering of the molecules (based on their representation) that is correlated with their retention time.
+%                     
+% \paragraph{Dual}                    
+%                 
+%     The primal optimization problem \eqref{prob:rankSVM-primal} can be equivalently expressed as:
+% \begin{align}
+%     \underset{\mathbf{w},\mathbf{\xi}}{min} &\quad \frac{1}{2}\|\mathbf{w}\|_2^2 + C\sum_{(i,j)\in P}\xi_{ij} \\
+%     \st &\quad 1-\xi_{ij} - \mathbf{w}^T(\phi_j-\phi_i) \leq 0, \forall(i,j)\in \pref\label{prob:rankSVM-primal-equiv}\\
+%         &\quad -\xi_{ij} \leq 0, \forall(i,j)\in P.
+% \end{align}
+% 
+% To find the dual problem of \eqref{prob:rankSVM-primal} we define the Lagrangian of problem \eqref{prob:rankSVM-primal-equiv}:
+% 
+% \begin{align}
+%     L(\mathbf{w},\mathbf{\xi},\mathbf{\alpha},\mathbf{\beta}) 
+%         &= \frac{1}{2}\|\mathbf{w}\|_2^2+C\bone^T\mathbf{\xi}+\left(\sum_{(i,j)\in\pref}\alpha_{ij}(1-\xi_{ij}-\mathbf{w}^T(\phi_j-\phi_i))\right)-\mathbf{\beta}^T\mathbf{\xi}\\
+%         &= \frac{1}{2}\|\mathbf{w}\|_2^2+C\bone^T\mathbf{\xi}+\balpha^T\bone-\balpha^T\mathbf{\xi}-\left(\sum_{(i,j)\in\pref}\alpha_{ij}\mathbf{w}^T(\phi_j-\phi_i)\right)-\mathbf{\beta}^T\mathbf{\xi}\label{eq:rankSVM-lagrangian}\\
+%         &= \frac{1}{2}\|\mathbf{w}\|_2^2+C\bone^T\mathbf{\xi}+\balpha^T\bone-\balpha^T\mathbf{\xi}-\balpha^T\mathbf{A}\Phi\mathbf{w}-\mathbf{\beta}^T\mathbf{\xi}.
+% \end{align}
+% 
+% For the definition of the $\mathbf{A}\in\{-1,0,1\}^{|\pref|\times\ell}$ matrix see \parencite{Bach2018}. Now we get the derivatives of $L$ with respect to $\mathbf{w}$ and $\mathbf{\xi}$\footnote{Check out this great tool: \url{http://www.matrixcalculus.org/}}:
+% 
+% \begin{align}
+%     \nabla_{\mathbf{w}}L(\mathbf{w},\mathbf{\xi},\balpha,\mathbf{\beta})&=\mathbf{w}-\Phi^T\mathbf{A}^T\balpha=0\Rightarrow\boxed{\mathbf{w}^*=\Phi^T\mathbf{A}^T\balpha}\\
+%     \nabla_{\mathbf{\xi}}L(\mathbf{w},\mathbf{\xi},\balpha,\mathbf{\beta})&=C\bone-\balpha-\mathbf{\beta}=0\Rightarrow \boxed{C\bone=\balpha+\mathbf{\beta}}
+% \end{align}
+% 
+% When we plug these solutions back into the Lagrangian (Equation~\eqref{eq:rankSVM-lagrangian}), we get the corresponding dual function problem of \eqref{prob:rankSVM-primal-equiv}:
+% 
+% \begin{align}
+%     L(\mathbf{w}^*,\mathbf{\xi}^*,\balpha,\mathbf{\beta})
+%         &= \frac{1}{2} \balpha^T\mathbf{A}\Phi\Phi^T\mathbf{A}^T\balpha - \balpha^T\mathbf{A}\Phi\Phi^T\mathbf{A}^T\balpha + \bone^T\balpha \\
+%         &= - \frac{1}{2} \balpha^T\mathbf{A}\Phi\Phi^T\mathbf{A}^T\balpha + \bone^T\balpha \\
+%         &= \boxed{- \frac{1}{2} \balpha^T\mathbf{A}\mathbf{K}\mathbf{A}^T\balpha + \bone^T\balpha = g(\balpha)}
+% \end{align}
+% 
+% with the following constraints on the dual variables: $0\leq\alpha_{ij}\leq C,\,\forall (i,j)\in\pref$, and $\mathbf{K}=\Phi\Phi^T\in\mathbb{R}^{\ell\times\ell}$ being the training kernel matrix with $[\mathbf{K}]_{st}=\phi_s^T\phi_t$. Therefore the dual optimization problem of \eqref{prob:rankSVM-primal-equiv} is given as\footnote{If we minimize the primal than we maximize the dual objective}:
+% 
+% \begin{align}
+%         \underset{\balpha}{\max} &\quad g(\balpha) = - \frac{1}{2} \balpha^T\mathbf{A}\mathbf{K}\mathbf{A}^T\balpha + \bone^T\balpha \label{prob:rankSVM-dual}\\ 
+%         \st &\quad 0\leq\alpha_{ij}\leq C,\,\forall (i,j)\in \pref.
+% \end{align}
+% 
+% \subsection{Optimization}
+% 
+% Lets consider the first step of the Conditional gradient algorithm.
+% 
+% \paragraph{1. Step: Finding $\mathbf{s}$}                
+% To run the algorithm we need to find the gradient of $g(\balpha)$:
+% 
+% \begin{align}
+%     \underset{\balpha}{\nabla}g(\balpha)=\underset{\balpha}{\nabla}\left(- \frac{1}{2} \balpha^T\mathbf{A}\mathbf{K}\mathbf{A}^T\balpha + \bone^T\balpha\right)=\bone - \mathbf{A}\mathbf{K}\mathbf{A}^T\balpha
+% \end{align}
+% 
+% This gradient can be used to solve the following optimization problem:
+% 
+% \begin{align}
+%     \underset{\mathbf{s}}{\max} &\quad  \underset{\balpha}{\nabla}g(\balpha)^T\mathbf{s} = (\bone - \mathbf{A}\mathbf{K}\mathbf{A}^T\balpha)^T\mathbf{s}\\
+%     \st &\quad 0\leq\mathbf{s}\leq C.    
+% \end{align}
+% 
+% If we define $\mathbf{d}=(\bone-\mathbf{A}\mathbf{K}\mathbf{A}^T\balpha)$ than the problem writes as:
+% 
+% \begin{align}
+%     \underset{\mathbf{s}}{\max} &\quad \mathbf{d}^T\mathbf{s}\\
+%     \st &\quad 0\leq\mathbf{s} \leq C.
+% \end{align}                
+% 
+% The optimal $\mathbf{s}$ can be easily find by inspecting the signs of the $\mathbf{d}$ vector:
+% 
+% \begin{equation}
+%     \mathbf{s}_{ij}  =\begin{cases}
+%                       C & \text{if } d_{ij} > 0 \\
+%                       0 & \text{otherwise}
+%                    \end{cases}.
+% \end{equation}
+% 
+% The proof idea here: The sum of the entries of $\mathbf{d}$ should be maximized. As $0\leq\mathbf{s}\leq C$ the largest coefficient should be given to all positive entries of $\mathbf{d}$, which is $C$. On the other hand, negative entries of $\mathbf{d}$ should not count into the sum and therefore get the multiplier $0$.      
+
+\newpage
+\printbibliography
+
+\end{document}
