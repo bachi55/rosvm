@@ -1,3 +1,13 @@
 **/__pycache__
 **/.idea
 rosvm.egg-info
+doc/rosvm_doc.kilepr
+doc/.kile
+doc/*.aux
+doc/*.bbl
+doc/*.bcf
+doc/*.blg
+doc/*.log
+doc/*.out
+doc/*.run.xml
+doc/*.synctex.gz
