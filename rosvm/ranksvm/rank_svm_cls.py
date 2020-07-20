@@ -212,7 +212,7 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
         self.duality_gap_threshold_after_training_score_converged = duality_gap_threshold_after_training_score_converged
         self.conv_criteria = conv_criteria
         if self.conv_criteria not in ["max_iter", "duality_gap", "rel_duality_gap_decay", "training_score",
-                                      "training_score++"]:
+                                      "training_score++", "rel_dual_gap_decay"]:
             raise ValueError("Invalid convergence criteria: '%s'." % self.conv_criteria)
 
         # Kernel parameters
@@ -334,15 +334,18 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
         # Initialize alpha: all dual variables are equal C
         self.alpha_ = np.full(len(self.pairs_train_), fill_value=self.C)  # shape = (n_pairs_train, )
 
-        if self.conv_criteria == "rel_duality_gap_decay":
-            _, _, gap_0 = self._evaluate_primal_and_dual_objective(self.alpha_)
-        elif self.conv_criteria in ["training_score", "training_score++"]:
-            train_score_0 = self.score(X, y)
-
         k = 0
         converged = False
         while k < self.max_iter:
             s = self._solve_sub_problem(self.alpha_)  # feasible update direction
+
+            if k == 0:
+                if self.conv_criteria == "rel_duality_gap_decay":
+                    _, _, duality_gap_0 = self._evaluate_primal_and_dual_objective(self.alpha_)
+                elif self.conv_criteria == "rel_dual_gap_decay":
+                    dual_gap_0 = self.last_gradient_ @ (s - self.alpha_)
+                elif self.conv_criteria in ["training_score", "training_score++"]:
+                    train_score_0 = self.score(X, y)
 
             # Get the step-size
             if self.step_size == "diminishing_1":
@@ -364,8 +367,11 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
                 converged = True
 
             if ((k % 10 == 0) and (k <= 100)) or ((k % 20 == 0) and (k > 100)):
+                if self.conv_criteria == "rel_dual_gap_decay":
+                    dual_gap = self.last_gradient_ @ (s - self.alpha_)
+
                 if self.conv_criteria in ["duality_gap", "rel_duality_gap_decay", "training_score++"] or self.debug:
-                    prim, dual, gap = self._evaluate_primal_and_dual_objective(self.alpha_)
+                    prim, dual, duality_gap = self._evaluate_primal_and_dual_objective(self.alpha_)
 
                 if self.conv_criteria in ["training_score", "training_score++"]:
                     train_score = self.score(self.KX_train_, y, X_is_kernel_input=True)
@@ -382,7 +388,7 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
                     # Objective values
                     self.debug_data_["primal_obj"].append(prim)
                     self.debug_data_["dual_obj"].append(dual)
-                    self.debug_data_["duality_gap"].append(gap)
+                    self.debug_data_["duality_gap"].append(duality_gap)
 
                     # General information about the convergence
                     self.debug_data_["step"].append(k)
@@ -391,14 +397,15 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
                     self.debug_data_["norm_s_minus_alpha"].append(np.linalg.norm(s - self.alpha_))
                     self.debug_data_["n_nonzero_s"].append(np.sum(s > 0))
 
-                if k > 0 and self.conv_criteria == "duality_gap" and gap <= self.duality_gap_threshold:
-                    msg = "k = %d, Duality gap below threshold: gap %.5f <= %.5f" % (k, gap, self.duality_gap_threshold)
+                if k > 0 and self.conv_criteria == "duality_gap" and duality_gap <= self.duality_gap_threshold:
+                    msg = "k = %d, Duality gap below threshold: gap %.5f <= %.5f" % (k, duality_gap,
+                                                                                     self.duality_gap_threshold)
                     converged = True
 
                 elif k > 0 and self.conv_criteria == "rel_duality_gap_decay" and \
-                        (gap / gap_0) <= self.duality_gap_threshold:
+                        (duality_gap / duality_gap_0) <= self.duality_gap_threshold:
                     msg = "k = %d, Relative duality gap (to gap_0) below threshold: gap / gap_0 = %.5f <= %.5f" \
-                          % (k, gap / gap_0, self.duality_gap_threshold)
+                          % (k, duality_gap / duality_gap_0, self.duality_gap_threshold)
                     converged = True
 
                 elif k > 0 and self.conv_criteria == "training_score" and \
@@ -410,9 +417,15 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
                         np.isclose(train_score_div, 1.0, rtol=0, atol=self.duality_gap_threshold):
                     self.duality_gap_threshold = self.duality_gap_threshold_after_training_score_converged
                     self.conv_criteria = "rel_duality_gap_decay"
-                    gap_0 = gap
+                    duality_gap_0 = duality_gap
                     if self.debug:
                         print("k = %d, Training score does not change much: div = %.5f" % (k, train_score_div))
+
+                elif k > 0 and self.conv_criteria == "rel_dual_gap_decay" and \
+                        (dual_gap / dual_gap_0) <= self.duality_gap_threshold:
+                    msg = "k = %d, Relative dual gap (to gap_0) below threshold: gap / gap_0 = %.5f <= %.5f" \
+                          % (k, dual_gap / dual_gap_0, self.duality_gap_threshold)
+                    converged = True
 
             if converged:
                 if self.debug:
@@ -685,6 +698,8 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
         s = np.zeros_like(d)
         s[d > 0] = self.C
 
+        self.last_gradient_ = d
+
         return s
 
     def _get_T_5_(self):
@@ -900,7 +915,7 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
 
         tmp = self._x_AKAt_y(delta_alpha)
 
-        nom = np.sum(delta_alpha) - tmp @ alpha
+        nom = np.sum(delta_alpha) - tmp @ alpha  # self.last_gradient_ @ delta_alpha
         den = tmp @ delta_alpha
 
         tau = nom / den
@@ -1012,13 +1027,15 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
         return tp, n_decisions
 
 
-def runtime(X, y, n_rep=7):
+def runtime(X, y, mol, n_rep=7):
     from time import time
     from sklearn.model_selection import GroupKFold
 
     for conv_criteria, step_size, duality_gap_threshold in [("max_iter", "diminishing_3", 0.01),
                                                             ("rel_duality_gap_decay", "diminishing_3", 0.05),
                                                             ("rel_duality_gap_decay", "linesearch", 0.05),
+                                                            ("rel_dual_gap_decay", "diminishing_3", 1e-3),
+                                                            ("rel_dual_gap_decay", "linesearch", 5e-4),
                                                             ("training_score++", "diminishing_3", 0.05),
                                                             ("training_score++", "linesearch", 0.05)]:
         t_min = np.inf
@@ -1062,7 +1079,7 @@ def scoring(X, y, mol):
         ranksvm = KernelRankSVC(
             C=8, kernel="minmax", pair_generation="random", random_state=292, max_iter=500, alpha_threshold=1e-2,
             pairwise_features=feature, step_size="diminishing_3", debug=True,
-            conv_criteria="max_iter", duality_gap_threshold=0.01) \
+            conv_criteria="max_iter", duality_gap_threshold=0.001) \
             .fit(X_train, y_train)
 
         print(feature, "%.5f" % ranksvm.score(X_test, y_test))
@@ -1077,5 +1094,7 @@ if __name__ == "__main__":
     y = Labels(data.rt.values, data.dataset.values)
     mol = data.smiles.values
 
-    runtime(X, y)
+    runtime(X, y, mol)
+    # scoring(X, y, mol)
+
 
