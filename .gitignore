@@ -1,6 +1,7 @@
 **/__pycache__
 **/.idea
 rosvm.egg-info
+**/.ipynb_checkpoints
 doc/rosvm_doc.kilepr
 doc/.kile
 doc/*.aux
