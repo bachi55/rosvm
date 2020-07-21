@@ -197,8 +197,9 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
     SOURCE: http://scikit-learn.org/stable/modules/classes.html#module-sklearn.metrics.pairwise
     """
     def __init__(self, C=1.0, kernel="precomputed", max_iter=500, gamma=None, coef0=1, degree=3, kernel_params=None,
-                 random_state=None, pair_generation="random", alpha_threshold=1e-3, pairwise_features="difference",
-                 debug=False, step_size="linesearch", duality_gap_threshold=1e-4, conv_criteria="rel_duality_gap_decay"):
+                 random_state=None, pair_generation="random", alpha_threshold=1e-2, pairwise_features="difference",
+                 debug=False, step_size="linesearch", duality_gap_threshold=1e-4,
+                 conv_criteria="rel_duality_gap_decay"):
 
         # Parameter for the optimization
         self.max_iter = max_iter
@@ -399,6 +400,29 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
         self.alpha_ = self._bound_alpha(self.alpha_, self.alpha_threshold, 0, self.C)
         self._assert_is_feasible(self.alpha_)
 
+        if self.debug:
+            # After alpha threshold, we add one more debug-info, as values might have changed a bit.
+            prim, dual, prim_dual_gap = self._evaluate_primal_and_dual_objective(self.alpha_)
+
+            # Validation and training scores
+            train_score = self.score(self.KX_train_, y, X_is_kernel_input=True)
+            self.debug_data_["train_score"].append(train_score)
+            self.debug_data_["val_score"].append(self.score(X_val, y_val))
+
+            # Objective values
+            self.debug_data_["primal_obj"].append(prim)
+            self.debug_data_["dual_obj"].append(dual)
+            self.debug_data_["duality_gap"].append(prim_dual_gap)
+
+            # General information about the convergence
+            self.debug_data_["step"].append(k + 1)
+            self.debug_data_["step_size"].append(self.debug_data_["step_size"][-1])
+            self.debug_data_["alpha"].append(self.alpha_)
+            self.debug_data_["norm_s_minus_alpha"].append(self.debug_data_["norm_s_minus_alpha"][-1])
+            self.debug_data_["n_nonzero_s"].append(self.debug_data_["n_nonzero_s"][-1])
+
+            self.debug_data_ = {key: np.array(value) for key, value in self.debug_data_.items()}
+
         # Only store information related to the support vectors
         is_sv = (self.alpha_ > 0)
         if self.pairwise_features == "difference":
@@ -410,9 +434,6 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
         self.pairs_train_ = [self.pairs_train_[idx] for idx, _is_sv in enumerate(is_sv) if _is_sv]
         self.py_train_ = [self.py_train_[idx] for idx, _is_sv in enumerate(is_sv) if _is_sv]
         self.pdss_train_ = [self.pdss_train_[idx] for idx, _is_sv in enumerate(is_sv) if _is_sv]
-
-        if self.debug:
-            self.debug_data_ = {key: np.array(value) for key, value in self.debug_data_.items()}
 
         self.k_ = k
 

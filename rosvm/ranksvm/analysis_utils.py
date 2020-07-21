@@ -165,29 +165,33 @@ class RankSVMAnalyzer(object):
         ax.grid()
 
     def plot_alphas(self, zscale="log"):
-        fig, axrr = plt.subplots(1, self.n_models, figsize=(25, 50), sharex="all")
+        nbins = 51
+
+        plt.figure()
+        fig, axrr = plt.subplots(1, self.n_models, figsize=(12, 6), sharey="all")
 
         for i, (name, model) in enumerate(self.ranksvm.items()):
             min_alpha = np.min(model.debug_data_["alpha"])
             max_alpha = np.max(model.debug_data_["alpha"])
 
+            print(name, "Min alpha = %.5f, Max alpha = %.5f" % (min_alpha, max_alpha))
+
             hist = []
+            yrange = []
             for alpha_step in model.debug_data_["alpha"]:
-                _tmp = np.histogram(alpha_step, bins=51, range=(min_alpha, max_alpha))
+                _tmp = np.histogram(alpha_step, bins=nbins, range=(min_alpha, max_alpha))
                 hist.append(_tmp[0])
                 yrange = _tmp[1]
-            hist = np.array(hist)
+            hist = np.array(hist).T
 
             if zscale == "log":
                 hist = np.log(hist + 1)
 
             ax = axrr[i]  # type: plt.Axes
-            ax.matshow(hist.T, vmax=np.max(hist), vmin=np.min(hist))
-
+            ax.imshow(hist, extent=[0, model.debug_data_["step"][-1], np.max(yrange), np.min(yrange)],
+                      **{'origin': 'upper', 'interpolation': 'nearest', 'aspect': 'auto'})
             ax.set_title(name)
-            ax.set_xticklabels([None] + [0, 100, 200, 300, 400, 500])
             ax.set_xlabel("Step")
-            ax.set_yticklabels([None] + ["%.3f" % y for j, y in enumerate(yrange) if j in [0, 10, 20, 30, 40, 50]])
             ax.set_ylabel("Dual value")
 
-        plt.show()
+        _ = plt.show()
