@@ -50,6 +50,16 @@
     innerrightmargin=20pt,
     innerleftmargin=20pt,
     backgroundcolor=gray!20!white}
+    
+\mdfdefinestyle{openquestion}{%
+    linecolor=black,
+    outerlinewidth=0.5pt,
+    roundcorner=0pt,
+    innertopmargin=\baselineskip,
+    innerbottommargin=\baselineskip,
+    innerrightmargin=20pt,
+    innerleftmargin=20pt,
+    backgroundcolor=green!20!white}
 
 
 \title{ROSVM Package - Mathematical Background}
@@ -153,8 +163,8 @@ Eq.~\eqref{eq:sub_problem} can be solved by simply evaluating $\mathbf{d}$ and s
 \begin{equation}
     s_{ij}=\begin{cases}
             C&\text{if }d_{ij}>0\\
-            0&\text{else}.
-           \end{cases}
+            0&\text{else}
+           \end{cases}.
 \end{equation}
 \begin{mdframed}[style=codeframe]
     The function '\texttt{\_solve\_sub\_problem}' implements the sub problem solver.
@@ -163,7 +173,7 @@ Eq.~\eqref{eq:sub_problem} can be solved by simply evaluating $\mathbf{d}$ and s
 \paragraph{Line-search:}
 The optimal step-size $\gamma^{(k)}$ can be determined by solving an univariate problem:
 \begin{equation}
-    \gamma^{(k)}=\underset{\gamma\in[0,1]}{\max}\quad g\left(\balpha^{(k)}-\gamma\left(\mathbf{s}-\balpha^{(k)}\right)\right).
+    \gamma_{LS}^{(k)}=\underset{\gamma\in[0,1]}{\max}\quad g\left(\balpha^{(k)}-\gamma\left(\mathbf{s}-\balpha^{(k)}\right)\right).
     \label{eq:linesearch_problem}
 \end{equation}
 For that, we set the derivative of \eqref{eq:linesearch_problem} to zero: 
@@ -177,15 +187,33 @@ For that, we set the derivative of \eqref{eq:linesearch_problem} to zero:
 \end{align}
 and solve for $\gamma$:
 \begin{align}
-    \gamma
+    \gamma\left(\mathbf{s}-\balpha^{(k)}\right)^T\mathbf{A}\mathbf{K}\mathbf{A}^T\left(\mathbf{s}-\balpha^{(k)}\right)
     &=\left(\balpha^{(k)}\right)^T\mathbf{A}\mathbf{K}\mathbf{A}^T\left(\mathbf{s}-\balpha^{(k)}\right)
             -\bones^T\left(\mathbf{s}-\balpha^{(k)}\right)\\
     \Leftrightarrow\\
     \gamma&=\frac{\left(\balpha^{(k)}\right)^T\mathbf{A}\mathbf{K}\mathbf{A}^T\left(\mathbf{s}-\balpha^{(k)}\right)
             -\bones^T\left(\mathbf{s}-\balpha^{(k)}\right)}{\left(\mathbf{s}-\balpha^{(k)}\right)^T\mathbf{A}\mathbf{K}\mathbf{A}^T\left(\mathbf{s}-\balpha^{(k)}\right)}\\
-    \gamma&=\frac{\left\langle\nabla g\left(\balpha^{(k)}\right),\left(\mathbf{s}-\balpha^{(k)}\right)\right\rangle}{\left(\mathbf{s}-\balpha^{(k)}\right)^T\mathbf{A}\mathbf{K}\mathbf{A}^T\left(\mathbf{s}-\balpha^{(k)}\right)}
-           =\frac{\left\langle\mathbf{d},\left(\mathbf{s}-\balpha^{(k)}\right)\right\rangle}{\left(\mathbf{s}-\balpha^{(k)}\right)^T\mathbf{A}\mathbf{K}\mathbf{A}^T\left(\mathbf{s}-\balpha^{(k)}\right)}\\
+    \Leftrightarrow\\
+    \gamma_{LS}^{(k)}&=\frac{\left\langle\nabla g\left(\balpha^{(k)}\right),\left(\mathbf{s}-\balpha^{(k)}\right)\right\rangle}{\left(\mathbf{s}-\balpha^{(k)}\right)^T\mathbf{A}\mathbf{K}\mathbf{A}^T\left(\mathbf{s}-\balpha^{(k)}\right)}\label{eq:optimal_stepsize_with_linesearch}.
 \end{align}
+To ensure that $\gamma_{LS}^{(k)}$ we clip the value to the range of $[0,1]$. To evaluate the nominator in Eq.~\eqref{eq:optimal_stepsize_with_linesearch} we can reuse the value of $\mathbf{d}=\nabla g\left(\balpha^{(k)}\right)$ calculated when solving the sub-problem (see Eq.~\eqref{eq:sub_problem})
+
+\paragraph{Determine Convergence:}
+\textcite{Jaggi2013} propose to use the duality gap:
+\begin{equation}
+    h\left(\balpha^{(k)}\right)\defi\left\langle\nabla g\left(\balpha^{(k)}\right),\left(\mathbf{s}-\balpha^{(k)}\right)\right\rangle
+\end{equation}
+as convergence criteria by defining a threshold $\epsilon$ and iterating until $h(\balpha^{(k)})<\epsilon$. The ratio behind this idea is, that the duality gap is an upper bound on the difference of the current function value for $\balpha^{(k)}$ and the one of the global maximizer $\balpha^*$ of Eq.~\eqref{eq:RankSVM_primal_problem}, i.e. $h\left(\balpha^{(k)}\right)\geq g\left(\balpha^*\right)-g\left(\balpha^{(k)}\right)$\footnote{Note: Here we formulate the dual optimization as a maximization. In \cite{Jaggi2013} the authors formulate it as a minimization which leads to slighly changed duality gap definition.}. 
+\begin{mdframed}[style=openquestion]
+    In practice it the duality gap $h\left(\balpha^{(k)}\right)$ was observed to have very large values and never approaching a reasonable threshold. However, the model performance was nevertheless very good. That might be because the $\balpha^{(k)}$ has many entries and those can have values up to $C$. A quadratic function of the dual vector, like $g$ in Eq.~\eqref{eq:RankSVM_dual_problem}, can take on very large values. The ``un-boundedness'' or missing normalization might be an issue here.  
+    
+    The current implementation gets around this issue, by checking the following quantity for the convergence:
+\begin{equation}
+    \frac{h(\balpha^{(k)})}{h(\balpha^{(0)})}<\epsilon,
+\end{equation}
+    where $\epsilon>0$, e.g. $\epsilon=0.005$, is the convergence threshold. Possible scaling factors of the function $h$ are canceled out. This convergence criteria can be interpreted as the relative decrease of the duality gap given the initial model $\balpha^{(0)}$. 
+\end{mdframed}
+% =\frac{\left\langle\mathbf{d},\left(\mathbf{s}-\balpha^{(k)}\right)\right\rangle}{\left(\mathbf{s}-\balpha^{(k)}\right)^T\mathbf{A}\mathbf{K}\mathbf{A}^T\left(\mathbf{s}-\balpha^{(k)}\right)}\\
 
 
 % \section{Notation}
