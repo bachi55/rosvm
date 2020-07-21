@@ -34,9 +34,13 @@ from sklearn.metrics.pairwise import pairwise_kernels
 from sklearn.utils.validation import check_random_state
 from sklearn.model_selection import train_test_split
 from collections.abc import Sequence
+from typing import TypeVar, Union, Dict
 
 from rosvm.ranksvm.pair_utils import get_pairs_multiple_datasets
-from rosvm.ranksvm.kernel_utils import tanimoto_kernel, minmax_kernel
+from rosvm.ranksvm.kernel_utils import tanimoto_kernel, generalized_tanimoto_kernel
+
+
+RANKSVM_T = TypeVar('RANKSVM_T', bound='KernelRankSVC')
 
 
 class Labels(Sequence):
@@ -52,7 +56,7 @@ class Labels(Sequence):
         self._dss = dss
         if len(self._rts) != len(self._dss):
             raise ValueError("Number of retention times must be equal the number of the dataset identifiers.")
-        self._unique_ds = set(self._dss)
+        self._unique_ds = sorted(set(self._dss))
 
         self.shape = (len(self._rts),)  # needed for scikit-learn input checks
 
@@ -192,12 +196,22 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
 
     SOURCE: http://scikit-learn.org/stable/modules/classes.html#module-sklearn.metrics.pairwise
     """
-    def __init__(self, C=1.0, kernel="precomputed", max_iter=1000, gamma=None, coef0=1, degree=3, kernel_params=None,
-                 random_state=None, pair_generation="eccb", alpha_threshold=1e-4, pairwise_features="difference",
-                 debug=False):
+    def __init__(self, C=1.0, kernel="precomputed", max_iter=500, gamma=None, coef0=1, degree=3, kernel_params=None,
+                 random_state=None, pair_generation="random", alpha_threshold=1e-2, pairwise_features="difference",
+                 debug=False, step_size="linesearch", duality_gap_threshold=1e-4,
+                 conv_criteria="rel_duality_gap_decay"):
 
         # Parameter for the optimization
         self.max_iter = max_iter
+        self.step_size = step_size
+        if self.step_size not in ["diminishing", "linesearch"]:
+            raise ValueError("Invalid step-size method: '%s'. Choices are 'diminishing' and 'linesearch'."
+                             % self.step_size)
+        self.duality_gap_threshold = duality_gap_threshold
+        self.conv_criteria = conv_criteria
+        if self.conv_criteria not in ["max_iter", "rel_duality_gap_decay"]:
+            raise ValueError("Invalid convergence criteria: '%s'. Choises are 'max_iter' and 'rel_duality_gap_decay'"
+                             % self.conv_criteria)
 
         # Kernel parameters
         self.kernel = kernel
@@ -232,7 +246,7 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
         #   self.pdss_train_ = None
         #   self.alpha_ = None
 
-    def fit(self, X: object, y: object) -> object:
+    def fit(self, X: np.ndarray, y: Labels) -> RANKSVM_T:
         """
         Estimating the parameters of the dual ranking svm with scaled margin.
         The conditional gradient descent algorithm is used to find the optimal
@@ -268,8 +282,14 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
                 "dual_obj": [],
                 "duality_gap": [],
                 "step_size": [],
-                "step": []
+                "step": [],
+                "alpha": [],
+                "norm_s_minus_alpha": [],
+                "n_nonzero_s": [],
+                "convergence_criteria": "max_iter"
             }
+        else:
+            X_val, y_val = None, None
 
         # Handle training data and calculate kernels if needed
         if self.kernel == "precomputed":
@@ -282,14 +302,11 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
             self.KX_train_ = self._get_kernel(self.X_train_)
 
         # Generate training pairs
+        select_random_pairs = False
+        pair_params = {"d_upper": np.inf, "d_lower": 1}
         if self.pair_generation == "eccb":
-            pair_params = {"d_upper": 16, "d_lower": 1}
-            select_random_pairs = False
-        elif self.pair_generation == "all":
-            pair_params = {"d_upper": np.inf, "d_lower": 1}
-            select_random_pairs = False
+            pair_params["d_upper"] = 16
         elif self.pair_generation == "random":
-            pair_params = {"d_upper": np.inf, "d_lower": 1}
             select_random_pairs = True
 
         self.pairs_train_, self.py_train_, self.pdss_train_ = get_pairs_multiple_datasets(
@@ -308,32 +325,72 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
             self.A_ = self._build_A_matrix(self.pairs_train_, self.py_train_, self.KX_train_.shape[0])
         elif self.pairwise_features == "exterior_product":
             self.P_0_, self.P_1_ = self._build_P_matrices(self.pairs_train_, self.KX_train_.shape[0])
+        else:
+            raise ValueError("Invalid pairwise feature: '%s'. Choices are 'difference' or 'exterior_product'"
+                             % self.pairwise_features)
 
         # Initialize alpha: all dual variables are equal C
         self.alpha_ = np.full(len(self.pairs_train_), fill_value=self.C)  # shape = (n_pairs_train, )
 
         k = 0
+        converged = False
         while k < self.max_iter:
-            if self.debug and (k % 20 == 0):
-                # Validation and training scores
-                self.debug_data_["train_score"].append(self.score(X, y))
-                self.debug_data_["val_score"].append(self.score(X_val, y_val))
+            s, grad = self._solve_sub_problem(self.alpha_)  # feasible update direction
 
-                # Objective values
-                prim, dual, gap = self._evaluate_primal_and_dual_objective(self.alpha_)
-                self.debug_data_["primal_obj"].append(prim)
-                self.debug_data_["dual_obj"].append(dual)
-                self.debug_data_["duality_gap"].append(gap)
+            if (k == 0) and (self.conv_criteria == "rel_duality_gap_decay"):
+                duality_gap_0 = self._get_duality_gap(s, self.alpha_, grad)
 
-                # General information about the convergence
-                self.debug_data_["step_size"].append(self._get_step_size_diminishing_3(k))
-                self.debug_data_["step"].append(k)
+            # Get the step-size
+            if self.step_size == "diminishing":
+                tau, duality_gap = self._get_step_size_diminishing(k), None
+            elif self.step_size == "linesearch":
+                tau, duality_gap = self._get_step_size_linesearch(self.alpha_, s, grad=grad)
+            else:
+                raise ValueError("Invalid step-size method: '%s'. Choices are 'diminishing' and 'linesearch'."
+                                 % self.step_size)
 
-            s = self._solve_sub_problem(self.alpha_)  # feasible update direction
+            if tau <= 0:
+                msg = "k = %d, %s step-size <= 0 (tau = %.5f)." % (k, self.step_size, tau)
+                print("Converged:", msg)
+                converged = True
 
-            tau = self._get_step_size_diminishing_3(k)  # step-width
+            if ((k % 5 == 0) and (k <= 100)) or ((k % 10 == 0) and (k > 100)):
+                if self.conv_criteria == "rel_duality_gap_decay":
+                    if duality_gap is None:
+                        duality_gap = self._get_duality_gap(s, self.alpha_, grad)
 
-            self.alpha_ = self.alpha_ + tau * (s - self.alpha_)
+                    if (duality_gap / duality_gap_0) <= self.duality_gap_threshold:
+                        msg = "k = %d, Relative duality gap (to gap_0) below threshold: gap / gap_0 = %.5f <= %.5f" \
+                              % (k, duality_gap / duality_gap_0, self.duality_gap_threshold)
+                        converged = True
+
+                if self.debug:
+                    prim, dual, prim_dual_gap = self._evaluate_primal_and_dual_objective(self.alpha_)
+
+                    # Validation and training scores
+                    train_score = self.score(self.KX_train_, y, X_is_kernel_input=True)
+                    self.debug_data_["train_score"].append(train_score)
+                    self.debug_data_["val_score"].append(self.score(X_val, y_val))
+
+                    # Objective values
+                    self.debug_data_["primal_obj"].append(prim)
+                    self.debug_data_["dual_obj"].append(dual)
+                    self.debug_data_["duality_gap"].append(prim_dual_gap)
+
+                    # General information about the convergence
+                    self.debug_data_["step"].append(k)
+                    self.debug_data_["step_size"].append(tau)
+                    self.debug_data_["alpha"].append(self.alpha_)
+                    self.debug_data_["norm_s_minus_alpha"].append(np.linalg.norm(s - self.alpha_))
+                    self.debug_data_["n_nonzero_s"].append(np.sum(s > 0))
+
+            if converged:
+                if self.debug:
+                    print("Converged:", msg)
+                    self.debug_data_["convergence_criteria"] = msg
+                break
+
+            self.alpha_ = self.alpha_ + tau * (s - self.alpha_)  # update alpha^{(k)} --> alpha^{(k + 1)}
 
             self._assert_is_feasible(self.alpha_)
 
@@ -342,6 +399,29 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
         # Threshold dual variables to the boarder ranges, if there are very close to it.
         self.alpha_ = self._bound_alpha(self.alpha_, self.alpha_threshold, 0, self.C)
         self._assert_is_feasible(self.alpha_)
+
+        if self.debug:
+            # After alpha threshold, we add one more debug-info, as values might have changed a bit.
+            prim, dual, prim_dual_gap = self._evaluate_primal_and_dual_objective(self.alpha_)
+
+            # Validation and training scores
+            train_score = self.score(self.KX_train_, y, X_is_kernel_input=True)
+            self.debug_data_["train_score"].append(train_score)
+            self.debug_data_["val_score"].append(self.score(X_val, y_val))
+
+            # Objective values
+            self.debug_data_["primal_obj"].append(prim)
+            self.debug_data_["dual_obj"].append(dual)
+            self.debug_data_["duality_gap"].append(prim_dual_gap)
+
+            # General information about the convergence
+            self.debug_data_["step"].append(k + 1)
+            self.debug_data_["step_size"].append(self.debug_data_["step_size"][-1])
+            self.debug_data_["alpha"].append(self.alpha_)
+            self.debug_data_["norm_s_minus_alpha"].append(self.debug_data_["norm_s_minus_alpha"][-1])
+            self.debug_data_["n_nonzero_s"].append(self.debug_data_["n_nonzero_s"][-1])
+
+            self.debug_data_ = {key: np.array(value) for key, value in self.debug_data_.items()}
 
         # Only store information related to the support vectors
         is_sv = (self.alpha_ > 0)
@@ -355,12 +435,11 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
         self.py_train_ = [self.py_train_[idx] for idx, _is_sv in enumerate(is_sv) if _is_sv]
         self.pdss_train_ = [self.pdss_train_[idx] for idx, _is_sv in enumerate(is_sv) if _is_sv]
 
-        if self.debug:
-            self.debug_data_ = {key: np.array(value) for key, value in self.debug_data_.items()}
+        self.k_ = k
 
         return self
 
-    def predict_pointwise(self, X):
+    def predict_pointwise(self, X, X_is_kernel_input=False):
         """
         Calculates the RankSVM preference score < w , phi_i > for a set of examples.
 
@@ -376,19 +455,19 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
         if self.pairwise_features == "exterior_product":
             raise ValueError("Pointwise prediction is only possible for the 'difference' pairwise-features.")
 
-        X = self._get_test_kernel(X)
+        X = self._get_test_kernel(X, X_is_kernel_input=X_is_kernel_input)
 
         wtx = (X @ (self.A_.T @ self.alpha_)).flatten()  # shape = (n_test, )
         assert wtx.shape == (len(X),)
 
         return wtx
 
-    def predict(self, X, return_margin=True):
+    def predict(self, X, return_margin=True, X_is_kernel_input=False):
         if self.pairwise_features == "difference":
-            wtx = self.predict_pointwise(X)
+            wtx = self.predict_pointwise(X, X_is_kernel_input=X_is_kernel_input)
             Y_pred = wtx[:, np.newaxis] - wtx[np.newaxis, :]  # shape = (n_samples, n_samples)
         elif self.pairwise_features == "exterior_product":
-            X = self._get_test_kernel(X).T  # shape = (n_train, n_test)
+            X = self._get_test_kernel(X, X_is_kernel_input=X_is_kernel_input).T  # shape = (n_train, n_test)
 
             # Get all pairs between all test examples. For those we wanna predict_pointwise the order.
             n_samples_test = X.shape[1]
@@ -416,7 +495,8 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
 
         return Y_pred
 
-    def score(self, X, y, sample_weight=None, return_score_per_dataset=False):
+    def score(self, X, y, sample_weight=None, return_score_per_dataset=False, X_is_kernel_input=False) \
+            -> Union[float, Dict]:
         """
         :param X: array-like, tutorial description
             feature-vectors: shape = (n_samples_test, d)
@@ -434,8 +514,11 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
 
         :param sample_weight: parameter currently not used.
 
-        :param return_score_per_dataset: boolean, indicating whether instead of an average score across
-            all datasets separate scores are returned.
+        :param return_score_per_dataset: boolean, indicating whether separate scores for each dataset are returned.
+            If False, the average score across all datasets is returned.
+
+        :param X_is_kernel_input: boolean, indicating the input X should be interpreted as kernel matrix. This 
+            overwrites the class parameter 'kernel'.
 
         :return:
             scalar, pairwise prediction accuracy separately calculated for all provided
@@ -449,7 +532,7 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
                 values: list, [score, n_test_samples, n_test_pairs]
         """
         if sample_weight:
-            return NotImplementedError("Samples weights in the scoring are currently not supported.")
+            raise NotImplementedError("Samples weights in the scoring are currently not supported.")
 
         rts, dss = zip(*y)
         rts = np.array(rts)
@@ -459,7 +542,7 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
         for ds in set(dss):  # get unique datasets
             # Calculate the score for each dataset individually
             Y = np.sign(rts[dss == ds][:, np.newaxis] - rts[dss == ds][np.newaxis, :])
-            Y_pred = self.predict(X[dss == ds])
+            Y_pred = self.predict(X[dss == ds], X_is_kernel_input=X_is_kernel_input, return_margin=False)
             scr, ntp = self.score_pairwise_using_prediction(Y, Y_pred)
             scores[ds] = [scr, np.sum(dss == ds).item(), ntp]
 
@@ -474,8 +557,8 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
 
         return out
 
-    def _get_test_kernel(self, X):
-        if self.kernel == "precomputed":
+    def _get_test_kernel(self, X, X_is_kernel_input=False):
+        if X_is_kernel_input or self.kernel == "precomputed":
             if not X.shape[1] == self.KX_train_.shape[0]:
                 raise ValueError("Test-train kernel must have as many columns as training examples.")
         else:
@@ -505,9 +588,9 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
 
         # Calculate the kernel
         if self.kernel == "tanimoto":
-            K_XY = tanimoto_kernel(X, Y)
+            K_XY = tanimoto_kernel(X, Y, shallow_input_check=True)
         elif self.kernel == "minmax":
-            K_XY = minmax_kernel(X, Y)
+            K_XY = generalized_tanimoto_kernel(X, Y, shallow_input_check=True)
         else:
             K_XY = pairwise_kernels(X, Y, metric=self.kernel, filter_params=True, n_jobs=n_jobs, **params)
 
@@ -529,10 +612,12 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
         [1] "A tutorial on support vector regression" by Smola et al. (2004)
         """
         if self.pairwise_features == "difference":
-            predicted_margins_ = self._x_AKAt_y(y=alpha)
-
+            predicted_margins_ = self._xt_AKAt_y(y=alpha)
         elif self.pairwise_features == "exterior_product":
             predicted_margins_ = self._grad_exterior_feat(alpha)
+        else:
+            raise ValueError("Invalid pairwise feature: '%s'. Choices are 'difference' or 'exterior_product'"
+                             % self.pairwise_features)
 
         wtw = alpha @ predicted_margins_
         assert wtw >= 0, "Norm of the primal parameters must be >= 0"
@@ -543,6 +628,7 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
         prim_obj = wtw / 2 + self.C * sum_xi
 
         dual_obj = np.sum(alpha) - wtw / 2
+        assert prim_obj >= dual_obj
 
         return prim_obj, dual_obj, (prim_obj - dual_obj) / (np.abs(prim_obj) + 1)
 
@@ -575,19 +661,24 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
         """
         Finding the feasible update direction.
 
-        :return: array-like, shape = (p, 1), s
+        :return: tuple(
+            array-like, shape = (p, 1), s
+            array-like, shape = (p, 1), gradient (d)
+        )
         """
         if self.pairwise_features == "difference":
-            predicted_margins_ = self._x_AKAt_y(y=alpha)
-
+            predicted_margins_ = self._xt_AKAt_y(y=alpha)
         elif self.pairwise_features == "exterior_product":
             predicted_margins_ = self._grad_exterior_feat(alpha)
+        else:
+            raise ValueError("Invalid pairwise feature: '%s'. Choices are 'difference' or 'exterior_product'"
+                             % self.pairwise_features)
 
         d = 1 - predicted_margins_  # expected margin - predicted margin = 1 - predicted margin
         s = np.zeros_like(d)
         s[d > 0] = self.C
 
-        return s
+        return s, d
 
     def _get_T_5_(self):
         if not hasattr(self, "T_5_"):
@@ -618,7 +709,7 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
 
         return (t_6 + (T_5 @ t_7)) * y  # originally (t_6 * y) + ((T_5 @ t_7) * y)
 
-    def _x_AKAt_y(self, x=None, y=None):
+    def _xt_AKAt_y(self, x=None, y=None, x_equal_y=False):
         """
         Function calculating:
             1) x^T \widetilde{A} K_phi \widetilde{A}^T y, if x and y are not None
@@ -638,7 +729,12 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
         """
         if (x is not None) and (y is not None):
 
-            return (x.T @ (self.A_ @ (self.KX_train_ @ (self.A_.T @ y)))).item()
+            if x_equal_y:
+                xtA = x @ self.A_
+                Atx = xtA.T
+                return (xtA @ self.KX_train_ @ Atx).item()
+            else:
+                return (x.T @ (self.A_ @ (self.KX_train_ @ (self.A_.T @ y)))).item()
 
         elif (x is None) and (y is not None):
 
@@ -655,6 +751,13 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
     # ---------------------------------
     # Static methods
     # ---------------------------------
+    @staticmethod
+    def _get_duality_gap(s, alpha, grad):
+        """
+        Calculate function h(alpha_k)
+        """
+        return grad @ (s - alpha)
+
     @staticmethod
     def _bound_alpha(alpha, threshold, min_alpha_val, max_alpha_val):
         """
@@ -736,43 +839,59 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
 
         return np.round((n * p) / 100).astype("int")
 
+    # ---------------------------------------
+    # STEP SIZE CALCULATION
+    # ---------------------------------------
     @staticmethod
-    def _get_step_size_diminishing(k, C, t_0):
+    def _get_step_size_diminishing(k):
         """
-        Calculate the step size using the diminishing strategy.
+        Simple step size only depending on the current iteration. Proposed in [1].
 
-            step size = t_0 / (1 + t_0 * C * (k - 1))
+            step size = 2 / (k + 2)
 
-            Border cases:
-                k = 1, first iteration: step size = t_0
-                t_0 = 1: step size = 1 / (1 + C * (k - 1))
-
-        :param k: scalar, current iteration
-        :param C: scalar, regularization parameter ranksvm
-        :param t_0: scalar, initial step-size
-        :return: scalar, step size
-
-        Ref: [1] "Towards Optimal One Pass Large Scale Learning with Averaged Stochastic Gradient Descent",
-                 Wei Xu, 2011, ArXiv
-             [2] "Large-Scale Machine Learning with Stochastic Gradient Descent", Leo Bottou, 2010
+        Ref: [1] "Stochastic Block-Coordinate Frank-Wolfe Optimization for Structural SVMs", Lacoste-Julien et al.,
+                 2012
         """
-        return t_0 / (1 + t_0 * C * (k - 1))
-
-    @staticmethod
-    def _get_step_size_diminishing_2(t):
-        """
-        Step size after Sandor:
-
-            t = t - (t**2 / 2)
-
-        :param t: scalar, current step size
-        :return: scalar, step size
-        """
-        return t - (t**2 / 2.0)
-
-    @staticmethod
-    def _get_step_size_diminishing_3(k):
         return 2 / (k + 2)
+
+    def _get_step_size_linesearch(self, alpha, s, grad=None):
+        """
+        Calculate step-size using line-search.
+
+        :param alpha: array-like, shape = (p,), dual variables in step k, before update.
+
+        :param s: array-like, shape = (p,), solution of the sub-problem
+
+        :return: tuple(
+            scalar, step-size using line-search
+            scalar, duality gap h(alpha_k)
+        )
+        """
+        delta_alpha = s - alpha
+
+        if grad is None:
+            if self.pairwise_features == "difference":
+                tmp = self._xt_AKAt_y(delta_alpha)
+            elif self.pairwise_features == "exterior_product":
+                tmp = self._grad_exterior_feat(delta_alpha)
+            else:
+                raise ValueError("Invalid pairwise feature: '%s'. Choices are 'difference' or 'exterior_product'"
+                                 % self.pairwise_features)
+
+            duality_gap = np.sum(delta_alpha) - tmp @ alpha
+            den = tmp @ delta_alpha
+        else:
+            duality_gap = grad @ delta_alpha
+
+            if self.pairwise_features == "difference":
+                den = self._xt_AKAt_y(x=delta_alpha, y=delta_alpha, x_equal_y=True)
+            elif self.pairwise_features == "exterior_product":
+                den = delta_alpha @ self._grad_exterior_feat(delta_alpha)
+            else:
+                raise ValueError("Invalid pairwise feature: '%s'. Choices are 'difference' or 'exterior_product'"
+                                 % self.pairwise_features)
+
+        return np.clip(duality_gap / den, 0, 1), duality_gap
 
     @staticmethod
     def score_pointwise_using_predictions(y, y_pred, normalize=True):
@@ -806,7 +925,7 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
         return tp, n_decisions
 
     @staticmethod
-    def score_pairwise_using_prediction(Y, Y_pred, normalize=True):
+    def score_pairwise_using_prediction_SLOW(Y, Y_pred, normalize=True):
         """
         :param Y: array-like, shape = (n_samples, n_samples), pairwise object preference
 
@@ -845,28 +964,116 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
 
         return tp, n_decisions
 
+    @staticmethod
+    def score_pairwise_using_prediction(Y, Y_pred, normalize=True):
+        """
+        :param Y: array-like, shape = (n_samples, n_samples), pairwise object preference
 
-if __name__ == "__main__":
-    import pandas as pd
+        :param Y_pred: array-like, shape = (n_samples, n_samples), pairwise object preference prediction
+
+        :param normalize: logical, indicating whether the number of correctly classified pairs
+            should be normalized by the total number of pairs (n_pairs_test).
+
+        :return: tuple(scalar, scalar), pairwise prediction accuracy and number of test pairs used
+        """
+        assert Y.shape == Y_pred.shape, "True and predicted label matrices must have the same size."
+        assert Y.shape[0] == Y.shape[1], "Label matrix must be squared."
+        assert np.all(np.diag(Y) == 0), "Assume that the diagonal labels are: Is i preferred over i?"
+        assert np.all(np.diag(Y_pred) == 0), "Assume that the diagonal labels are: Is i preferred over i?"
+        assert np.all(Y == - Y.T), "Assume anti-symmetric relation"
+        assert np.all(Y_pred == - Y_pred.T), "Predicted relations must be anti-symmetric"
+
+        r_c = np.where(Y < 0)  # i is preferred over j
+        n_decisions = len(r_c[0])
+        if n_decisions == 0:
+            raise RuntimeError("Score is undefined of all true target values are equal.")
+
+        tp = np.sum(Y_pred[r_c] == 0) / 2  # ties predicted
+        tp += np.sum(Y_pred[r_c] < 0)  # i is _predicted_ to be preferred over j
+
+        if normalize:
+            tp /= n_decisions
+
+        return tp, n_decisions
+
+
+def runtime(X, y, mol, n_rep=7, pairwise_features="difference"):
+    from time import time
     from sklearn.model_selection import GroupKFold
 
-    # Load example data
-    data = pd.read_csv("tutorial/example_data.csv", sep="\t")
-    X = np.array(list(map(lambda x: x.split(","), data.substructure_count.values)), dtype="float")
-    y = Labels(data.rt.values, data.dataset.values)
-    mol = data.smiles.values
+    res = []
+
+    for conv_criteria, step_size, duality_gap_threshold in [("max_iter", "diminishing", 0.01),
+                                                            ("rel_duality_gap_decay", "diminishing", 1e-4),
+                                                            ("rel_duality_gap_decay", "linesearch", 1e-4)]:
+        t_min = np.inf
+        t_mean = 0
+        k = 0
+        s = 0
+
+        for rep, (train, test) in enumerate(GroupKFold(n_splits=n_rep).split(X, y, groups=mol)):
+            X_train, X_test = X[train], X[test]
+            y_train, y_test = y[train], y[test]
+
+            start = time()
+            ranksvm = KernelRankSVC(C=1/16, kernel="minmax", pair_generation="random", random_state=2921, max_iter=500,
+                                    alpha_threshold=1e-2, step_size=step_size, conv_criteria=conv_criteria,
+                                    duality_gap_threshold=duality_gap_threshold, pairwise_features=pairwise_features) \
+                .fit(X_train, y_train)
+            end = time()
+            t_min = np.minimum(t_min, end - start)
+            t_mean += (end - start)
+            k += ranksvm.k_
+            s += ranksvm.score(X_test, y_test)
+
+        print((conv_criteria, step_size),
+              "\tmin_fittime=%.2fs" % t_min,
+              "\tmean_fittime=%.2fs" % (t_mean / n_rep),
+              "\titer=%.2f" % (k / n_rep),
+              "\tscore=%.3f" % (s / n_rep))
+
+        res.append([conv_criteria, step_size, t_min, t_mean / n_rep, k / n_rep, s / n_rep])
+
+    print()
+    print(
+        pd.DataFrame(res, columns=["Conv. criteria", "Step-size", "Fit-time (min, s)", "Fit-time (mean, s)",
+                                   "n_iter (mean)", "score (mean)"])
+            .round(2)
+            .to_csv(sep="|", index=False)
+    )
+
+
+def scoring(X, y, mol):
+    from sklearn.model_selection import GroupKFold
 
     # Split into training and test
-    train, test = next(GroupKFold(n_splits=3).split(X, y, groups=mol))
+    train, test = next(GroupKFold(n_splits=5).split(X, y, groups=mol))
     print("(n_train, n_test) = (%d, %d)" % (len(train), len(test)))
     assert not (set(mol[train]) & set(mol[test]))
 
     X_train, X_test = X[train], X[test]
     y_train, y_test = y[train], y[test]
-    mol_train = mol[train]
 
     for feature in ["difference", "exterior_product"]:
-        ranksvm = KernelRankSVC(C=8, kernel="minmax", pair_generation="random", random_state=292, max_iter=1000,
-                                alpha_threshold=1e-2, pairwise_features=feature).fit(X_train, y_train)
+        ranksvm = KernelRankSVC(
+            C=1/8, kernel="minmax", pair_generation="random", random_state=292, max_iter=500, alpha_threshold=1e-2,
+            pairwise_features=feature, step_size="diminishing", debug=True,
+            conv_criteria="max_iter", duality_gap_threshold=0.001) \
+            .fit(X_train, y_train)
 
-        print(feature, ranksvm.score(X_test, y_test))
+        print(feature, "%.5f" % ranksvm.score(X_test, y_test))
+
+
+if __name__ == "__main__":
+    import pandas as pd
+
+    # Load example data
+    data = pd.read_csv("tutorial/ECCB2018_data.csv", sep="\t")
+    X = np.array(list(map(lambda x: x.split(","), data.substructure_count.values)), dtype="float")
+    y = Labels(data.rt.values, data.dataset.values)
+    mol = data.smiles.values
+
+    runtime(X, y, mol, pairwise_features="exterior_product")
+    # scoring(X, y, mol)
+
+

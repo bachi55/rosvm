@@ -35,6 +35,29 @@ from rosvm.ranksvm.rank_svm_cls import KernelRankSVC, Labels
 from rosvm.ranksvm.tests.gradient_of_exterior_features import fAndG
 
 
+def cindex_rlscore_reference(Y, P):
+    """
+    Function taken from the rlscore package: https://github.com/aatapa/RLScore as reference.
+    """
+    correct = Y
+    predictions = P
+    assert len(correct) == len(predictions)
+    disagreement = 0.
+    decisions = 0.
+    for i in range(len(correct)):
+        for j in range(len(correct)):
+            if correct[i] > correct[j]:
+                decisions += 1.
+                if predictions[i] < predictions[j]:
+                    disagreement += 1.
+                elif predictions[i] == predictions[j]:
+                    disagreement += 0.5
+    # Disagreement error is not defined for cases where there
+    # are no disagreeing pairs
+    disagreement /= decisions
+    return 1. - disagreement
+
+
 class TestPMatrixConstruction(unittest.TestCase):
     def test_small_example(self):
         pairs = [(0, 1), (1, 2), (1, 3), (0, 3), (5, 1)]
@@ -146,29 +169,6 @@ class TestAMatrixConstruction(unittest.TestCase):
 
 
 class TestPointwiseScoringFunction(unittest.TestCase):
-    @staticmethod
-    def slow_cindex(Y, P):
-        """
-        Function taken from the rlscore package: https://github.com/aatapa/RLScore as reference.
-        """
-        correct = Y
-        predictions = P
-        assert len(correct) == len(predictions)
-        disagreement = 0.
-        decisions = 0.
-        for i in range(len(correct)):
-            for j in range(len(correct)):
-                if correct[i] > correct[j]:
-                    decisions += 1.
-                    if predictions[i] < predictions[j]:
-                        disagreement += 1.
-                    elif predictions[i] == predictions[j]:
-                        disagreement += 0.5
-        # Disagreement error is not defined for cases where there
-        # are no disagreeing pairs
-        disagreement /= decisions
-        return 1. - disagreement
-
     def test_random_prediction(self):
         rs = np.random.RandomState(767)
 
@@ -176,8 +176,8 @@ class TestPointwiseScoringFunction(unittest.TestCase):
             y = rs.random(100)
             y_pred = rs.random(100)  # Predicted pseudo-scores
 
-            perf, _ = KernelRankSVC().score_pointwise_using_predictions(y_pred, y)
-            perf_ref = self.slow_cindex(y, y_pred)
+            perf, _ = KernelRankSVC().score_pointwise_using_predictions(y, y_pred)
+            perf_ref = cindex_rlscore_reference(y, y_pred)
 
             np.testing.assert_allclose(perf, perf_ref)
 
@@ -204,6 +204,97 @@ class TestPointwiseScoringFunction(unittest.TestCase):
         y_pred = np.array([10, 10, 10, 10, 10])
         perf, _ = KernelRankSVC().score_pointwise_using_predictions(y, y_pred)
         self.assertEqual(perf, 0.5)
+
+
+class TestPairwiseScoringFunction(unittest.TestCase):
+    @staticmethod
+    def make_Y_matrix(y):
+        return y[:, np.newaxis] - y[np.newaxis, :]
+
+    def test_random_prediction_against_pointwise_scoring(self):
+        rs = np.random.RandomState(767)
+
+        for i in range(25):
+            y = rs.random(100)
+            y_pred = rs.random(100)  # Predicted pseudo-scores
+
+            Y = self.make_Y_matrix(y)
+            Y_pred = self.make_Y_matrix(y_pred)
+
+            perf_pair, _ = KernelRankSVC().score_pairwise_using_prediction_SLOW(Y, Y_pred)
+            perf_point, _ = KernelRankSVC().score_pointwise_using_predictions(y, y_pred)
+
+            np.testing.assert_allclose(perf_pair, perf_point)
+
+    def test_corner_cases(self):
+        Y = self.make_Y_matrix(np.array([1, 3, 3, 4, 2]))
+
+        Y_pred = self.make_Y_matrix(np.array([-4, 5, 5, 7, 1]))
+        perf, n_test_pairs = KernelRankSVC().score_pairwise_using_prediction_SLOW(Y, Y_pred)
+        self.assertEqual(perf, 1.0)
+        self.assertEqual(n_test_pairs, 9)
+
+        Y_pred = self.make_Y_matrix(np.array([-4, 8, 5, 7, 1]))
+        perf, n_test_pairs = KernelRankSVC().score_pairwise_using_prediction_SLOW(Y, Y_pred)
+        self.assertEqual(perf, 8.0 / 9.0)
+
+        Y_pred = self.make_Y_matrix(np.array([-4, 8, 7, 7, 1]))
+        perf, _ = KernelRankSVC().score_pairwise_using_prediction_SLOW(Y, Y_pred)
+        self.assertEqual(perf, 7.5 / 9.0)
+
+        Y_pred = self.make_Y_matrix(np.array([10, 8, 7, 6, 9]))
+        perf, _ = KernelRankSVC().score_pairwise_using_prediction_SLOW(Y, Y_pred)
+        self.assertEqual(perf, 0.0)
+
+        Y_pred = self.make_Y_matrix(np.array([10, 10, 10, 10, 10]))
+        perf, _ = KernelRankSVC().score_pairwise_using_prediction_SLOW(Y, Y_pred)
+        self.assertEqual(perf, 0.5)
+
+
+class TestVectorizedPairwiseScoringFunction(unittest.TestCase):
+    @staticmethod
+    def make_Y_matrix(y):
+        return y[:, np.newaxis] - y[np.newaxis, :]
+
+    def test_random_prediction_against_pointwise_scoring(self):
+        rs = np.random.RandomState(767)
+
+        for i in range(25):
+            y = rs.random(100)
+            y_pred = rs.random(100)  # Predicted pseudo-scores
+
+            Y = self.make_Y_matrix(y)
+            Y_pred = self.make_Y_matrix(y_pred)
+
+            perf_pair, _ = KernelRankSVC().score_pairwise_using_prediction(Y, Y_pred)
+            perf_point, _ = KernelRankSVC().score_pointwise_using_predictions(y, y_pred)
+
+            np.testing.assert_allclose(perf_pair, perf_point)
+
+    def test_corner_cases(self):
+        Y = self.make_Y_matrix(np.array([1, 3, 3, 4, 2]))
+
+        Y_pred = self.make_Y_matrix(np.array([-4, 5, 5, 7, 1]))
+        perf, n_test_pairs = KernelRankSVC().score_pairwise_using_prediction(Y, Y_pred)
+        self.assertEqual(perf, 1.0)
+        self.assertEqual(n_test_pairs, 9)
+
+        Y_pred = self.make_Y_matrix(np.array([-4, 8, 5, 7, 1]))
+        perf, n_test_pairs = KernelRankSVC().score_pairwise_using_prediction(Y, Y_pred)
+        self.assertEqual(perf, 8.0 / 9.0)
+
+        Y_pred = self.make_Y_matrix(np.array([-4, 8, 7, 7, 1]))
+        perf, _ = KernelRankSVC().score_pairwise_using_prediction(Y, Y_pred)
+        self.assertEqual(perf, 7.5 / 9.0)
+
+        Y_pred = self.make_Y_matrix(np.array([10, 8, 7, 6, 9]))
+        perf, _ = KernelRankSVC().score_pairwise_using_prediction(Y, Y_pred)
+        self.assertEqual(perf, 0.0)
+
+        Y_pred = self.make_Y_matrix(np.array([10, 10, 10, 10, 10]))
+        perf, _ = KernelRankSVC().score_pairwise_using_prediction(Y, Y_pred)
+        self.assertEqual(perf, 0.5)
+
 
 
 class TestDualGradients(unittest.TestCase):
