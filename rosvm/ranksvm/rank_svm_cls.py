@@ -846,18 +846,29 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
             scalar, duality gap h(alpha_k)
         )
         """
-        if self.pairwise_features == "exterior_product":
-            raise NotImplementedError("Linea-search currently implemented only for 'difference' features.")
-
         delta_alpha = s - alpha
 
         if grad is None:
-            tmp = self._xt_AKAt_y(delta_alpha)
+            if self.pairwise_features == "difference":
+                tmp = self._xt_AKAt_y(delta_alpha)
+            elif self.pairwise_features == "exterior_product":
+                tmp = self._grad_exterior_feat(delta_alpha)
+            else:
+                raise ValueError("Invalid pairwise feature: '%s'. Choices are 'difference' or 'exterior_product'"
+                                 % self.pairwise_features)
+
             duality_gap = np.sum(delta_alpha) - tmp @ alpha
             den = tmp @ delta_alpha
         else:
             duality_gap = grad @ delta_alpha
-            den = self._xt_AKAt_y(x=delta_alpha, y=delta_alpha, x_equal_y=True)
+
+            if self.pairwise_features == "difference":
+                den = self._xt_AKAt_y(x=delta_alpha, y=delta_alpha, x_equal_y=True)
+            elif self.pairwise_features == "exterior_product":
+                den = delta_alpha @ self._grad_exterior_feat(delta_alpha)
+            else:
+                raise ValueError("Invalid pairwise feature: '%s'. Choices are 'difference' or 'exterior_product'"
+                                 % self.pairwise_features)
 
         return np.clip(duality_gap / den, 0, 1), duality_gap
 
@@ -965,7 +976,7 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
         return tp, n_decisions
 
 
-def runtime(X, y, mol, n_rep=7):
+def runtime(X, y, mol, n_rep=7, pairwise_features="difference"):
     from time import time
     from sklearn.model_selection import GroupKFold
 
@@ -986,7 +997,8 @@ def runtime(X, y, mol, n_rep=7):
             start = time()
             ranksvm = KernelRankSVC(C=1/16, kernel="minmax", pair_generation="random", random_state=2921, max_iter=500,
                                     alpha_threshold=1e-2, step_size=step_size, conv_criteria=conv_criteria,
-                                    duality_gap_threshold=duality_gap_threshold).fit(X_train, y_train)
+                                    duality_gap_threshold=duality_gap_threshold, pairwise_features=pairwise_features) \
+                .fit(X_train, y_train)
             end = time()
             t_min = np.minimum(t_min, end - start)
             t_mean += (end - start)
@@ -1040,7 +1052,7 @@ if __name__ == "__main__":
     y = Labels(data.rt.values, data.dataset.values)
     mol = data.smiles.values
 
-    runtime(X, y, mol)
+    runtime(X, y, mol, pairwise_features="exterior_product")
     # scoring(X, y, mol)
 
 
