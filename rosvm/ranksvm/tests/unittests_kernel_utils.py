@@ -232,7 +232,9 @@ class TestTanimotoKernel(unittest.TestCase):
         X_A = np.array([[1, 1, 0], [0, 1, 1], [1, 0, 0]])
         X_B = np.array([[1, 0, 1], [1, 1, 1], [0, 0, 0], [1, 1, 0]])
 
-        # symmetric kernel
+        # ----------------
+        # Symmetric kernel
+        # ----------------
         K = tanimoto_kernel(X_A)
         np.testing.assert_equal(K.shape, (3, 3))
         np.testing.assert_equal(np.diag(K), np.ones((3,)))
@@ -243,7 +245,13 @@ class TestTanimotoKernel(unittest.TestCase):
         assert (np.max(K) <= 1.), "Kernel values must be <= 1"
         assert (np.min(K) >= 0.), "Kernel values must be >= 0"
 
-        # non-symmetric kernel
+        # Test against generalized tanimoto kernel implementation
+        K_gen = generalized_tanimoto_kernel(X_A)
+        np.testing.assert_equal(K, K_gen)
+
+        # --------------------
+        # Non-symmetric kernel
+        # --------------------
         K = tanimoto_kernel(X_A, X_B)
         np.testing.assert_equal(K.shape, (3, 4))
         np.testing.assert_equal(K[0, 1], 2. / 3.)
@@ -252,6 +260,10 @@ class TestTanimotoKernel(unittest.TestCase):
         np.testing.assert_equal(K[2, 0], 1. / 2.)
         assert (np.max(K) <= 1.), "Kernel values must be <= 1"
         assert (np.min(K) >= 0.), "Kernel values must be >= 0"
+
+        # Test against generalized tanimoto kernel implementation
+        K_gen = generalized_tanimoto_kernel(X_A, X_B)
+        np.testing.assert_equal(K, K_gen)
 
     def test_on_larger_random_data(self):
         def jacscr(x, y):
@@ -268,7 +280,9 @@ class TestTanimotoKernel(unittest.TestCase):
         X_A = np.random.RandomState(493).randint(0, 2, size=(51, 32))
         X_B = np.random.RandomState(493).randint(0, 2, size=(12, 32))
 
-        # symmetric kernel
+        # ----------------
+        # Symmetric kernel
+        # ----------------
         K = tanimoto_kernel(X_A)
         np.testing.assert_equal(K.shape, (51, 51))
         np.testing.assert_equal(K[3, 6], jacscr(X_A[3], X_A[6]))
@@ -280,11 +294,21 @@ class TestTanimotoKernel(unittest.TestCase):
         np.testing.assert_equal(K[5, 10], K[10, 5])
         np.testing.assert_equal(np.diag(K), np.ones((51,)))
 
-        # non-symmetric kernel
+        # Test against generalized tanimoto kernel implementation
+        K_gen = generalized_tanimoto_kernel(X_A)
+        np.testing.assert_equal(K, K_gen)
+
+        # --------------------
+        # Non-symmetric kernel
+        # --------------------
         K = tanimoto_kernel(X_A, X_B)
         np.testing.assert_equal(K.shape, (51, 12))
         np.testing.assert_equal(K[3, 6], jacscr(X_A[3], X_B[6]))
         np.testing.assert_equal(K[1, 1], jacscr(X_A[1], X_B[1]))
+
+        # Test against generalized tanimoto kernel implementation
+        K_gen = generalized_tanimoto_kernel(X_A, X_B)
+        np.testing.assert_equal(K, K_gen)
 
     def test_compatibility_with_sparse_matrix(self):
         self.skipTest("Not implemented")

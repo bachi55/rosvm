@@ -37,7 +37,7 @@ from collections.abc import Sequence
 from typing import TypeVar, Union, Dict
 
 from rosvm.ranksvm.pair_utils import get_pairs_multiple_datasets
-from rosvm.ranksvm.kernel_utils import tanimoto_kernel, minmax_kernel, generalized_tanimoto_kernel
+from rosvm.ranksvm.kernel_utils import tanimoto_kernel, generalized_tanimoto_kernel
 
 
 RANKSVM_T = TypeVar('RANKSVM_T', bound='KernelRankSVC')
