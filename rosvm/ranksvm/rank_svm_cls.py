@@ -198,22 +198,19 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
     """
     def __init__(self, C=1.0, kernel="precomputed", max_iter=500, gamma=None, coef0=1, degree=3, kernel_params=None,
                  random_state=None, pair_generation="random", alpha_threshold=1e-3, pairwise_features="difference",
-                 debug=False, step_size="diminishing_3", tau_0=0.5, duality_gap_threshold=5e-2,
-                 conv_criteria="training_score++", duality_gap_threshold_after_training_score_converged=0.5):
+                 debug=False, step_size="linesearch", duality_gap_threshold=1e-4, conv_criteria="rel_duality_gap_decay"):
 
         # Parameter for the optimization
         self.max_iter = max_iter
         self.step_size = step_size
-        if self.step_size not in ["diminishing_1", "diminishing_2", "diminishing_3", "linesearch"]:
-            raise ValueError("Invalid step-size method: '%s'. Choices are 'diminishing_1', 'diminishing_2', "
-                             "'diminishing_3' and 'linesearch'." % self.step_size)
-        self.tau_0 = tau_0
+        if self.step_size not in ["diminishing", "linesearch"]:
+            raise ValueError("Invalid step-size method: '%s'. Choices are 'diminishing' and 'linesearch'."
+                             % self.step_size)
         self.duality_gap_threshold = duality_gap_threshold
-        self.duality_gap_threshold_after_training_score_converged = duality_gap_threshold_after_training_score_converged
         self.conv_criteria = conv_criteria
-        if self.conv_criteria not in ["max_iter", "prim_dual_gap", "rel_prim_dual_gap_decay", "training_score",
-                                      "training_score++", "rel_duality_gap_decay"]:
-            raise ValueError("Invalid convergence criteria: '%s'." % self.conv_criteria)
+        if self.conv_criteria not in ["max_iter", "rel_duality_gap_decay"]:
+            raise ValueError("Invalid convergence criteria: '%s'. Choises are 'max_iter' and 'rel_duality_gap_decay'"
+                             % self.conv_criteria)
 
         # Kernel parameters
         self.kernel = kernel
@@ -339,30 +336,17 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
         while k < self.max_iter:
             s, grad = self._solve_sub_problem(self.alpha_)  # feasible update direction
 
-            if k == 0:
-                if self.conv_criteria == "rel_prim_dual_gap_decay":
-                    _, _, prim_dual_gap_0 = self._evaluate_primal_and_dual_objective(self.alpha_)
-                elif self.conv_criteria == "rel_duality_gap_decay":
-                    duality_gap_0 = self._get_duality_gap(s, self.alpha_, grad)
-                elif self.conv_criteria in ["training_score", "training_score++"]:
-                    train_score_0 = self.score(X, y)
+            if (k == 0) and (self.conv_criteria == "rel_duality_gap_decay"):
+                duality_gap_0 = self._get_duality_gap(s, self.alpha_, grad)
 
             # Get the step-size
-            if self.step_size == "diminishing_1":
-                tau = self._get_step_size_diminishing_1(k, self.C, self.tau_0)
-                duality_gap = None
-            elif self.step_size == "diminishing_2":
-                tau = self._get_step_size_diminishing_2(tau) if k > 0 else self.tau_0
-                duality_gap = None
-            elif self.step_size == "diminishing_3":
-                tau = self._get_step_size_diminishing_3(k)
-                duality_gap = None
+            if self.step_size == "diminishing":
+                tau, duality_gap = self._get_step_size_diminishing(k), None
             elif self.step_size == "linesearch":
                 tau, duality_gap = self._get_step_size_linesearch(self.alpha_, s, grad=grad)
-                # if (k > 0) or self.tau_0 is None else self.tau_0
             else:
-                raise ValueError("Invalid step-size method: '%s'. Choices are 'diminishing_1', 'diminishing_2', "
-                                 "'diminishing_3' and 'linesearch'." % self.step_size)
+                raise ValueError("Invalid step-size method: '%s'. Choices are 'diminishing' and 'linesearch'."
+                                 % self.step_size)
 
             if tau <= 0:
                 msg = "k = %d, %s step-size <= 0 (tau = %.5f)." % (k, self.step_size, tau)
@@ -370,21 +354,20 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
                 converged = True
 
             if ((k % 5 == 0) and (k <= 100)) or ((k % 10 == 0) and (k > 100)):
-                if self.conv_criteria == "rel_duality_gap_decay" and duality_gap is None:
-                    duality_gap = self._get_duality_gap(s, self.alpha_, grad)
+                if self.conv_criteria == "rel_duality_gap_decay":
+                    if duality_gap is None:
+                        duality_gap = self._get_duality_gap(s, self.alpha_, grad)
 
-                if self.conv_criteria in ["prim_dual_gap", "rel_prim_dual_gap_decay", "training_score++"] or self.debug:
-                    prim, dual, prim_dual_gap = self._evaluate_primal_and_dual_objective(self.alpha_)
-
-                if self.conv_criteria in ["training_score", "training_score++"]:
-                    train_score = self.score(self.KX_train_, y, X_is_kernel_input=True)
-                    train_score_div = train_score / train_score_0
-                    train_score_0 = train_score
-                elif self.debug:
-                    train_score = self.score(self.KX_train_, y, X_is_kernel_input=True)
+                    if (duality_gap / duality_gap_0) <= self.duality_gap_threshold:
+                        msg = "k = %d, Relative duality gap (to gap_0) below threshold: gap / gap_0 = %.5f <= %.5f" \
+                              % (k, duality_gap / duality_gap_0, self.duality_gap_threshold)
+                        converged = True
 
                 if self.debug:
+                    prim, dual, prim_dual_gap = self._evaluate_primal_and_dual_objective(self.alpha_)
+
                     # Validation and training scores
+                    train_score = self.score(self.KX_train_, y, X_is_kernel_input=True)
                     self.debug_data_["train_score"].append(train_score)
                     self.debug_data_["val_score"].append(self.score(X_val, y_val))
 
@@ -399,36 +382,6 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
                     self.debug_data_["alpha"].append(self.alpha_)
                     self.debug_data_["norm_s_minus_alpha"].append(np.linalg.norm(s - self.alpha_))
                     self.debug_data_["n_nonzero_s"].append(np.sum(s > 0))
-
-                if k > 0 and self.conv_criteria == "prim_dual_gap" and prim_dual_gap <= self.duality_gap_threshold:
-                    msg = "k = %d, Duality gap below threshold: gap %.5f <= %.5f" % (k, prim_dual_gap,
-                                                                                     self.duality_gap_threshold)
-                    converged = True
-
-                elif k > 0 and self.conv_criteria == "rel_prim_dual_gap_decay" and \
-                        (prim_dual_gap / prim_dual_gap_0) <= self.duality_gap_threshold:
-                    msg = "k = %d, Relative primal-dual gap (to gap_0) below threshold: gap / gap_0 = %.5f <= %.5f" \
-                          % (k, prim_dual_gap / prim_dual_gap_0, self.duality_gap_threshold)
-                    converged = True
-
-                elif k > 0 and self.conv_criteria == "training_score" and \
-                        np.isclose(train_score_div, 1.0, rtol=0, atol=self.duality_gap_threshold):
-                    msg = "k = %d, Training score does not change much: div = %.5f" % (k, train_score_div)
-                    converged = True
-
-                elif k > 0 and self.conv_criteria == "training_score++" and \
-                        np.isclose(train_score_div, 1.0, rtol=0, atol=self.duality_gap_threshold):
-                    self.duality_gap_threshold = self.duality_gap_threshold_after_training_score_converged
-                    self.conv_criteria = "rel_prim_dual_gap_decay"
-                    prim_dual_gap_0 = prim_dual_gap
-                    if self.debug:
-                        print("k = %d, Training score does not change much: div = %.5f" % (k, train_score_div))
-
-                elif k > 0 and self.conv_criteria == "rel_duality_gap_decay" and \
-                        (duality_gap / duality_gap_0) <= self.duality_gap_threshold:
-                    msg = "k = %d, Relative duality gap (to gap_0) below threshold: gap / gap_0 = %.5f <= %.5f" \
-                          % (k, duality_gap / duality_gap_0, self.duality_gap_threshold)
-                    converged = True
 
             if converged:
                 if self.debug:
@@ -869,41 +822,7 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
     # STEP SIZE CALCULATION
     # ---------------------------------------
     @staticmethod
-    def _get_step_size_diminishing_1(k, C, t_0):
-        """
-        Calculate the step size using the diminishing strategy.
-
-            step size = t_0 / (1 + t_0 * C * k)
-
-            Border cases:
-                k = 0, first iteration: step size = t_0
-                t_0 = 1: step size = 1 / (1 + C * k)
-
-        :param k: scalar, current iteration. First iteration is assumed to be k = 0.
-        :param C: scalar, regularization parameter RankSVM
-        :param t_0: scalar, initial step-size
-        :return: scalar, step size
-
-        Ref: [1] "Towards Optimal One Pass Large Scale Learning with Averaged Stochastic Gradient Descent",
-                 Wei Xu, 2011, ArXiv
-             [2] "Large-Scale Machine Learning with Stochastic Gradient Descent", Leo Bottou, 2010
-        """
-        return t_0 / (1 + t_0 * C * k)
-
-    @staticmethod
-    def _get_step_size_diminishing_2(t):
-        """
-        Step size after Sandor:
-
-            t = t - (t**2 / 2)
-
-        :param t: scalar, current step size
-        :return: scalar, step size
-        """
-        return t - (t**2 / 2.0)
-
-    @staticmethod
-    def _get_step_size_diminishing_3(k):
+    def _get_step_size_diminishing(k):
         """
         Simple step size only depending on the current iteration. Proposed in [1].
 
@@ -1052,13 +971,9 @@ def runtime(X, y, mol, n_rep=7):
 
     res = []
 
-    for conv_criteria, step_size, duality_gap_threshold in [("max_iter", "diminishing_3", 0.01),
-                                                            ("rel_prim_dual_gap_decay", "diminishing_3", 0.05),
-                                                            ("rel_prim_dual_gap_decay", "linesearch", 0.05),
-                                                            ("rel_duality_gap_decay", "diminishing_3", 1e-3),
-                                                            ("rel_duality_gap_decay", "linesearch", 1e-4),
-                                                            ("training_score++", "diminishing_3", 0.05),
-                                                            ("training_score++", "linesearch", 0.05)]:
+    for conv_criteria, step_size, duality_gap_threshold in [("max_iter", "diminishing", 0.01),
+                                                            ("rel_duality_gap_decay", "diminishing", 1e-4),
+                                                            ("rel_duality_gap_decay", "linesearch", 1e-4)]:
         t_min = np.inf
         t_mean = 0
         k = 0
@@ -1069,7 +984,7 @@ def runtime(X, y, mol, n_rep=7):
             y_train, y_test = y[train], y[test]
 
             start = time()
-            ranksvm = KernelRankSVC(C=16, kernel="minmax", pair_generation="random", random_state=2921, max_iter=500,
+            ranksvm = KernelRankSVC(C=1/16, kernel="minmax", pair_generation="random", random_state=2921, max_iter=500,
                                     alpha_threshold=1e-2, step_size=step_size, conv_criteria=conv_criteria,
                                     duality_gap_threshold=duality_gap_threshold).fit(X_train, y_train)
             end = time()
@@ -1086,8 +1001,8 @@ def runtime(X, y, mol, n_rep=7):
 
         res.append([conv_criteria, step_size, t_min, t_mean / n_rep, k / n_rep, s / n_rep])
 
+    print()
     print(
-        "\n",
         pd.DataFrame(res, columns=["Conv. criteria", "Step-size", "Fit-time (min, s)", "Fit-time (mean, s)",
                                    "n_iter (mean)", "score (mean)"])
             .round(2)
@@ -1109,7 +1024,7 @@ def scoring(X, y, mol):
     for feature in ["difference", "exterior_product"]:
         ranksvm = KernelRankSVC(
             C=1/8, kernel="minmax", pair_generation="random", random_state=292, max_iter=500, alpha_threshold=1e-2,
-            pairwise_features=feature, step_size="diminishing_3", debug=True,
+            pairwise_features=feature, step_size="diminishing", debug=True,
             conv_criteria="max_iter", duality_gap_threshold=0.001) \
             .fit(X_train, y_train)
 
