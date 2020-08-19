@@ -246,7 +246,7 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
         #   self.pdss_train_ = None
         #   self.alpha_ = None
 
-    def fit(self, X: np.ndarray, y: Labels) -> RANKSVM_T:
+    def fit(self, X: np.ndarray, y: Labels, groups=None) -> RANKSVM_T:
         """
         Estimating the parameters of the dual ranking svm with scaled margin.
         The conditional gradient descent algorithm is used to find the optimal

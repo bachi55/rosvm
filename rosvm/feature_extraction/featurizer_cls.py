@@ -36,7 +36,7 @@ from scipy.sparse import dok_matrix
 
 class CircularFPFeaturizer(BaseEstimator, TransformerMixin):
     def __init__(self, fp_type="ECFP", only_freq_subs=False, min_subs_freq=0.1, fp_mode="count", n_bits_folded=2048,
-                 use_chirality=False, output_dense_matrix=False, max_n_bits_for_dense_output=10000):
+                 use_chirality=False, output_dense_matrix=False, max_n_bits_for_dense_output=10000, radius=2):
         """
         Circular Fingerprint featurizer calculates ECFP or FCFP fingerprints from molecular structures.
 
@@ -69,37 +69,24 @@ class CircularFPFeaturizer(BaseEstimator, TransformerMixin):
         :param max_n_bits_for_dense_output: scalar, maximum number of bits allowed to convert output to a dense matrix.
             This parameter is used to override "return_dense_matrix" at run-time.
         """
-        fp_type = fp_type.upper()
-        if fp_type not in ["ECFP", "FCFP"]:
-            raise ValueError("Invalid fingerprint type: '%s'. Choices are 'ECFP' and 'FCFP'.")
         self.fp_type = fp_type
-        self._use_features = (self.fp_type == "FCFP")
+        if self.fp_type not in ["ECFP", "FCFP"]:
+            raise ValueError("Invalid fingerprint type: '%s'. Choices are 'ECFP' and 'FCFP'.")
 
-        if min_subs_freq < 0 or min_subs_freq > 1:
-            raise ValueError("Sub-structure frequency invalid: '%f'. Must be from range [0, 1].")
         self.min_subs_freq = min_subs_freq
+        if self.min_subs_freq < 0 or self.min_subs_freq > 1:
+            raise ValueError("Sub-structure frequency invalid: '%f'. Must be from range [0, 1].")
 
-        if fp_mode not in ["count", "binary", "binary_folded"]:
-            raise ValueError("Invalid fingerprint mode: '%s'. Choices are 'count', 'binary' and 'binary_folded'.")
         self.fp_mode = fp_mode
-        self._use_counts = (self.fp_mode == "count")
-        self._use_binary_generator = (self.fp_mode == "binary_folded")
+        if self.fp_mode not in ["count", "binary", "binary_folded"]:
+            raise ValueError("Invalid fingerprint mode: '%s'. Choices are 'count', 'binary' and 'binary_folded'.")
 
-        self.only_freq_subs = only_freq_subs if not self._use_binary_generator else False
+        self.only_freq_subs = only_freq_subs
         self.n_bits_folded = n_bits_folded
         self.use_chirality = use_chirality
-        self.return_dense_matrix = output_dense_matrix
+        self.output_dense_matrix = output_dense_matrix
         self.max_n_bits_for_dense_output = max_n_bits_for_dense_output
-
-        self._radius = 2
-        self._max_hash_value = 2 ** 32  # hash values are stored as unsigned int (32 bit), uint32
-
-        # Parameters to fit
-        if self._use_binary_generator:
-            self.n_bits_ = self.n_bits_folded
-        else:
-            if not only_freq_subs:
-                self.n_bits_ = self._max_hash_value
+        self.radius = radius
 
     def get_length(self):
         return self.__len__()
@@ -132,12 +119,12 @@ class CircularFPFeaturizer(BaseEstimator, TransformerMixin):
             if not mol:
                 raise RuntimeError("SMILES could not be parsed: '%s'." % smi)
 
-        if self._use_binary_generator:
-            fp = GetMorganFingerprintAsBitVect(mol, radius=self._radius, useChirality=self.use_chirality,
-                                               useFeatures=self._use_features, nBits=self.n_bits_folded)
+        if self.use_binary_generator_:
+            fp = GetMorganFingerprintAsBitVect(mol, radius=self.radius, useChirality=self.use_chirality,
+                                               useFeatures=self.use_features_, nBits=self.n_bits_folded)
         else:
-            fp = GetMorganFingerprint(mol, radius=self._radius, useChirality=self.use_chirality,
-                                      useFeatures=self._use_features, useCounts=self._use_counts)
+            fp = GetMorganFingerprint(mol, radius=self.radius, useChirality=self.use_chirality,
+                                      useFeatures=self.use_features_, useCounts=self.use_counts_)
 
         return fp
 
@@ -151,11 +138,23 @@ class CircularFPFeaturizer(BaseEstimator, TransformerMixin):
 
         return fps
 
-    def fit(self, mols):
+    def fit(self, mols, y=None, groups=None):
         """
         :param mols: list of strings or rdkit.Chem.rdchem.Mol objects, strings are interpreted as SMILES representing
             the molecules and converted into rdkit mol objects.
         """
+        self.use_features_ = (self.fp_type == "FCFP")
+        self.use_counts_ = (self.fp_mode == "count")
+        self.use_binary_generator_ = (self.fp_mode == "binary_folded")
+        self.max_hash_value_ = 2 ** 32  # hash values are stored as unsigned int (32 bit), uint32
+
+        if self.use_binary_generator_:
+            self.n_bits_ = self.n_bits_folded
+            self.only_freq_subs = False
+        else:
+            if not self.only_freq_subs:
+                self.n_bits_ = self.max_hash_value_
+
         if not self.only_freq_subs:
             # No fitting needed
             return self
@@ -195,7 +194,7 @@ class CircularFPFeaturizer(BaseEstimator, TransformerMixin):
                     else:
                         fps_mat[i, hash] = cnt
 
-        if self.return_dense_matrix and (self.n_bits_ <= self.max_n_bits_for_dense_output):
+        if self.output_dense_matrix and (self.n_bits_ <= self.max_n_bits_for_dense_output):
             fps_mat = fps_mat.toarray()
         else:
             fps_mat = fps_mat.tocsr()
@@ -228,4 +227,4 @@ class CircularFPFeaturizer(BaseEstimator, TransformerMixin):
 
 if __name__ == "__main__":
     print(CircularFPFeaturizer(only_freq_subs=False).fit_transform(
-        ["CC(=O)C1=CC2=C(OC(C)(C)[C@@H](O)[C@@H]2O)C=C1", "C1COC2=CC=CC=C2C1"] * 5000))
+        ["CC(=O)C1=CC2=C(OC(C)(C)[C@@H](O)[C@@H]2O)C=C1", "C1COC2=CC=CC=C2C1"] * 100))

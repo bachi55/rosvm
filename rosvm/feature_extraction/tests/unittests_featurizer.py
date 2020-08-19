@@ -32,8 +32,9 @@ from rdkit.Chem import MolFromSmiles
 from rdkit.Chem.rdMolDescriptors import GetMorganFingerprint, GetMorganFingerprintAsBitVect
 from scipy.sparse import isspmatrix_csr
 from sklearn.exceptions import NotFittedError
+from sklearn.base import clone
 
-from featurizer_cls import CircularFPFeaturizer
+from rosvm.feature_extraction.featurizer_cls import CircularFPFeaturizer
 
 
 class TestCircularFPFeaturizer(unittest.TestCase):
@@ -57,7 +58,7 @@ class TestCircularFPFeaturizer(unittest.TestCase):
 
     def test__error_when_parsing_smiles(self) -> None:
         with self.assertRaises(RuntimeError):
-            CircularFPFeaturizer().transform([
+            CircularFPFeaturizer().fit_transform([
                 "O=C(O)C1OC(Oc2c(-c3ccc(O)c(O)c3)oc3cc(O)cc(O)c3c2=O)C(O)C(O)C1O",
                 "Oc1cc(O)c2c(c1)OC1(c3ccc(O)c(O)c3)Oc3cc(O)c4c(c3C2C1O)OC(c1ccc(O)c(O)c1)C(O)C4",
                 "COc1cc(O)c2c(=O)c(O)c(-c3ccc(O)c(O)c3)oc2c1",
@@ -204,34 +205,34 @@ class TestCircularFPFeaturizer(unittest.TestCase):
 
         # Output shape
         self.assertEqual(fps_mat_smi.shape[0], self.n_mols)
-        self.assertEqual(fps_mat_smi.shape[1], fprintr._max_hash_value)
+        self.assertEqual(fps_mat_smi.shape[1], fprintr.max_hash_value_)
         self.assertEqual(fps_mat_mol.shape[0], self.n_mols)
-        self.assertEqual(fps_mat_mol.shape[1], fprintr._max_hash_value)
+        self.assertEqual(fps_mat_mol.shape[1], fprintr.max_hash_value_)
 
         # Fingerprint matrix structure
         for i, mol in enumerate(self.mols):
-            fps_ref = GetMorganFingerprint(mol, radius=fprintr._radius, useFeatures=fprintr._use_features,
-                                           useChirality=fprintr.use_chirality, useCounts=fprintr._use_counts)
+            fps_ref = GetMorganFingerprint(mol, radius=fprintr.radius, useFeatures=fprintr.use_features_,
+                                           useChirality=fprintr.use_chirality, useCounts=fprintr.use_counts_)
             for hash, cnt in fps_ref.GetNonzeroElements().items():
                 self.assertEqual(fps_mat_smi[i, hash], cnt)
                 self.assertEqual(fps_mat_mol[i, hash], cnt)
 
     def test__hashed_counting_fingerprints__fcfp(self) -> None:
-        fprintr = CircularFPFeaturizer(fp_type="fcfp")
+        fprintr = CircularFPFeaturizer(fp_type="FCFP")
 
         fps_mat_smi = fprintr.fit_transform(self.smis)  # using SMILES
         fps_mat_mol = fprintr.fit_transform(self.mols)  # using Mol objects
 
         # Output shape
         self.assertEqual(fps_mat_smi.shape[0], self.n_mols)
-        self.assertEqual(fps_mat_smi.shape[1], fprintr._max_hash_value)
+        self.assertEqual(fps_mat_smi.shape[1], fprintr.max_hash_value_)
         self.assertEqual(fps_mat_mol.shape[0], self.n_mols)
-        self.assertEqual(fps_mat_mol.shape[1], fprintr._max_hash_value)
+        self.assertEqual(fps_mat_mol.shape[1], fprintr.max_hash_value_)
 
         # Fingerprint matrix structure
         for i, mol in enumerate(self.mols):
-            fps_ref = GetMorganFingerprint(mol, radius=fprintr._radius, useFeatures=fprintr._use_features,
-                                           useChirality=fprintr.use_chirality, useCounts=fprintr._use_counts)
+            fps_ref = GetMorganFingerprint(mol, radius=fprintr.radius, useFeatures=fprintr.use_features_,
+                                           useChirality=fprintr.use_chirality, useCounts=fprintr.use_counts_)
             for hash, cnt in fps_ref.GetNonzeroElements().items():
                 self.assertEqual(fps_mat_smi[i, hash], cnt)
                 self.assertEqual(fps_mat_mol[i, hash], cnt)
@@ -244,14 +245,14 @@ class TestCircularFPFeaturizer(unittest.TestCase):
 
         # Output shape
         self.assertEqual(fps_mat_smi.shape[0], self.n_mols)
-        self.assertEqual(fps_mat_smi.shape[1], fprintr._max_hash_value)
+        self.assertEqual(fps_mat_smi.shape[1], fprintr.max_hash_value_)
         self.assertEqual(fps_mat_mol.shape[0], self.n_mols)
-        self.assertEqual(fps_mat_mol.shape[1], fprintr._max_hash_value)
+        self.assertEqual(fps_mat_mol.shape[1], fprintr.max_hash_value_)
 
         # Fingerprint matrix structure
         for i, mol in enumerate(self.mols):
-            fps_ref = GetMorganFingerprint(mol, radius=fprintr._radius, useFeatures=fprintr._use_features,
-                                           useChirality=fprintr.use_chirality, useCounts=fprintr._use_counts)
+            fps_ref = GetMorganFingerprint(mol, radius=fprintr.radius, useFeatures=fprintr.use_features_,
+                                           useChirality=fprintr.use_chirality, useCounts=fprintr.use_counts_)
             for hash in fps_ref.GetNonzeroElements():
                 self.assertTrue(fps_mat_smi[i, hash])
                 self.assertTrue(fps_mat_mol[i, hash])
@@ -274,7 +275,7 @@ class TestCircularFPFeaturizer(unittest.TestCase):
 
         # Fingerprint matrix structure
         for i, mol in enumerate(self.mols):
-            fps_ref = GetMorganFingerprintAsBitVect(mol, radius=fprintr._radius, useFeatures=fprintr._use_features,
+            fps_ref = GetMorganFingerprintAsBitVect(mol, radius=fprintr.radius, useFeatures=fprintr.use_features_,
                                                     useChirality=fprintr.use_chirality, nBits=fprintr.n_bits_folded)
             on_bits = list(fps_ref.GetOnBits())
             for j in range(fprintr.n_bits_folded):
@@ -286,29 +287,38 @@ class TestCircularFPFeaturizer(unittest.TestCase):
                     self.assertFalse(fps_mat_mol[i, j])
 
     def test__rdkit_parameters_are_correct(self) -> None:
-        fprintr = CircularFPFeaturizer(fp_type="ecfp", fp_mode="count")
-        self.assertTrue(fprintr._use_counts)
-        self.assertFalse(fprintr._use_features)
+        fprintr = CircularFPFeaturizer(fp_type="ECFP", fp_mode="count").fit(None)
+        self.assertTrue(fprintr.use_counts_)
+        self.assertFalse(fprintr.use_features_)
 
-        fprintr = CircularFPFeaturizer(fp_type="fcfp", fp_mode="count")
-        self.assertTrue(fprintr._use_counts)
-        self.assertTrue(fprintr._use_features)
+        fprintr = CircularFPFeaturizer(fp_type="FCFP", fp_mode="count").fit(None)
+        self.assertTrue(fprintr.use_counts_)
+        self.assertTrue(fprintr.use_features_)
 
-        fprintr = CircularFPFeaturizer(fp_type="ecfp", fp_mode="binary")
-        self.assertFalse(fprintr._use_counts)
-        self.assertFalse(fprintr._use_features)
+        fprintr = CircularFPFeaturizer(fp_type="ECFP", fp_mode="binary").fit(None)
+        self.assertFalse(fprintr.use_counts_)
+        self.assertFalse(fprintr.use_features_)
 
-        fprintr = CircularFPFeaturizer(fp_type="fcfp", fp_mode="binary")
-        self.assertFalse(fprintr._use_counts)
-        self.assertTrue(fprintr._use_features)
+        fprintr = CircularFPFeaturizer(fp_type="FCFP", fp_mode="binary").fit(None)
+        self.assertFalse(fprintr.use_counts_)
+        self.assertTrue(fprintr.use_features_)
 
-        fprintr = CircularFPFeaturizer(fp_type="ecfp", fp_mode="binary_folded")
-        self.assertFalse(fprintr._use_counts)
-        self.assertFalse(fprintr._use_features)
+        fprintr = CircularFPFeaturizer(fp_type="ECFP", fp_mode="binary_folded").fit(None)
+        self.assertFalse(fprintr.use_counts_)
+        self.assertFalse(fprintr.use_features_)
 
-        fprintr = CircularFPFeaturizer(fp_type="fcfp", fp_mode="binary_folded")
-        self.assertFalse(fprintr._use_counts)
-        self.assertTrue(fprintr._use_features)
+        fprintr = CircularFPFeaturizer(fp_type="FCFP", fp_mode="binary_folded").fit(None)
+        self.assertFalse(fprintr.use_counts_)
+        self.assertTrue(fprintr.use_features_)
+
+    def test__sklearn_get_params(self):
+        fprinter = CircularFPFeaturizer()
+        print(fprinter.get_params())
+
+    def test__sklearn_clone(self):
+        fprinter = CircularFPFeaturizer()
+
+        fprinter_cloned = clone(fprinter)
 
 
 if __name__ == '__main__':
