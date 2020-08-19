@@ -47,6 +47,7 @@
 \newcommand{\molkern}{\kappa}
 \newcommand{\bmolkern}{\mathbf{k}}
 \newcommand{\Molkern}{\mathbf{K}}
+\newcommand{\syskern}{\lambda}
 \DeclareMathOperator{\sign}{sign}
 
 
@@ -136,12 +137,17 @@ where $C>0$ is the regularization parameter. We define the pairwise labels as th
 \end{split}
 \end{equation}
 where $\mathbf{y}\in\mathbb{R}^\numexp$ is the vector of pairwise labels, and $\mathbf{B}\in\{-1,0,1\}^{\numpair\times\numexp}$ with row $p=(i,j)$ being $[\mathbf{B}]_{p\cdot}=(0,\ldots,0,\underbrace{1}_{i},0,\ldots,0,\underbrace{-1}_{j},0,\ldots,0)$. For further details refer to the work by \cite{Kuo2014}. Using the properties of the Hadamard product $\circ$ we can reformulate the function $g(\balpha)$ of the problem in Eq.~\eqref{eq:RankSVM_dual_problem} \parencite{Styan1973}:
-\begin{align}
+\begin{equation}
+\begin{split}
     g(\balpha) 
         &= \bones^T\balpha-\frac{1}{2} \balpha^T\left(\mathbf{y}\mathbf{y}^T\circ\mathbf{B}\mathbf{K}\mathbf{B}^T\right)\balpha \\
         &= \bones^T\balpha-\frac{1}{2} \balpha^T\left(\mathbf{D}_\mathbf{y}\mathbf{B}\mathbf{K}\mathbf{B}^T\mathbf{D}_\mathbf{y}\right)\balpha \\
-        &= \bones^T\balpha-\frac{1}{2} \balpha^T\mathbf{A}\mathbf{K}\mathbf{A}^T\balpha.
-\end{align}
+        &= \bones^T\balpha-\frac{1}{2} \balpha^T\mathbf{A}\mathbf{K}\mathbf{A}^T\balpha\\
+        &= \sum_{(i,j)\in\Pset}\alpha_{ij} -\frac{1}{2}\sum_{(i,j)\in\Pset}\sum_{(u,v)\in\Pset}\alpha_{ij}\alpha_{uv}y_{ij}y_{uv}\big(\ldots\\
+        &\quad\quad\underbrace{\molkern(\x_i,\x_u)-\molkern(\x_i,\x_v)-\molkern(\x_j,\x_u)+\molkern(\x_j,\x_v)}_{\text{Pairwise kernel between }(i,j)\text{ and }(u,v)}\big)
+        \label{eq:dual_objective_function}
+\end{split}
+\end{equation}
 Here, $\mathbf{D}_\mathbf{y}\in\mathbb{R}^{\numpair\times\numpair}$ is a diagonal matrix storing the pairwise labels, and $\mathbf{A}\defi\mathbf{D}_\mathbf{y}\mathbf{B}\in\{-1,0,1\}^{\numpair\times\numexp}$. The matrix $\mathbf{A}$ now contains the pairwise labels as well by multiplying each row $p=(i,j)$ of $\mathbf{B}$ with $y_{ij}$, i.e. $[\mathbf{A}]_{p\cdot}=y_{ij}\cdot(0,\ldots,0,\underbrace{1}_{i},0,\ldots,0,\underbrace{-1}_{j},0,\ldots,0)$. 
 \begin{mdframed}[style=codeframe]
     Check out '\texttt{\_build\_A\_matrix}' for the actual implementation of the $\mathbf{A}$-matrix construction from the data.
@@ -264,10 +270,41 @@ In the following we assume, that for all pairs in the training set, i.e. $(i,j)\
 
 \subsubsection{Concatenating $\x$ and $\z$}
 
-Concatenating the feature descriptors of the molecules and the chromatographic system is one option to include the descriptors in to prediction. For that, the kernel feature vector $\phi_i$ (see Eq.~\eqref{eq:RankSVM_primal_problem}) defined as:
+Concatenating the feature descriptors of the molecules and the chromatographic system is one option to include the descriptors in to prediction. For that, the kernel feature vector $\phi_i$ (see Eq.~\eqref{eq:RankSVM_primal_problem}) is defined as:
 \begin{equation}
-    \phi_i = \phi\left(\left[\begin{matrix}\x_i\\\z_i\end{matrix}\right]\right)
+    \phi_i = \phi\left(\left[\begin{matrix}\x_i\\\z_i\end{matrix}\right]\right).
 \end{equation}
+The \emph{pairwise kernel} (see Eq.~\eqref{eq:dual_objective_function}) will be given as:
+\begin{equation}
+     \molkern\left(\left[\begin{matrix}\x_i\\\z_{ij}\end{matrix}\right],\left[\begin{matrix}\x_u\\\z_{uv}\end{matrix}\right]\right)
+    -\molkern\left(\left[\begin{matrix}\x_i\\\z_{ij}\end{matrix}\right],\left[\begin{matrix}\x_v\\\z_{uv}\end{matrix}\right]\right)
+    -\molkern\left(\left[\begin{matrix}\x_j\\\z_{ij}\end{matrix}\right],\left[\begin{matrix}\x_u\\\z_{uv}\end{matrix}\right]\right)
+    +\molkern\left(\left[\begin{matrix}\x_j\\\z_{ij}\end{matrix}\right],\left[\begin{matrix}\x_v\\\z_{uv}\end{matrix}\right]\right).
+\end{equation}
+Here, the kernel $\molkern$ does not have the interpretation of a similarity measure between molecules, but rather between the combination of molecule and chromatographic system features. 
+\begin{mdframed}[style=openquestion]
+     In practice we could for example concatenate molecular fingerprints and eluent descriptors. As kernel we can utilize the generalized Tanimoto kernel developed by \textcite{Szedmak2020a}. This kernel can be used on real valued features.
+\end{mdframed}
+
+\subsubsection{Kronecker Product of Kernel Feature vectors ($\phi(\x)\otimes\varphi(\z)$)}
+
+Another approach to include the chromatographic system features is through a separate kernel and the Kronecker product. We define the $\phi(\x_i)\otimes\varphi(\z_i)$ as the feature associated with $\x_i$ and $\z_i$. The pairwise kernel (see Eq.~\eqref{eq:dual_objective_function}) will be given as:
+\begin{align}
+    &\langle\phi_i\otimes\varphi_{ij}-\phi_j\otimes\varphi_{ij},\phi_u\otimes\varphi_{uv}-\phi_v\otimes\varphi_{uv}\rangle\\
+        &=\langle\phi_i\otimes\varphi_{ij},\phi_u\otimes\varphi_{uv}\rangle
+         -\langle\phi_i\otimes\varphi_{ij},\phi_v\otimes\varphi_{uv}\rangle
+         -\langle\phi_j\otimes\varphi_{ij},\phi_u\otimes\varphi_{uv}\rangle
+         +\langle\phi_j\otimes\varphi_{ij},\phi_v\otimes\varphi_{uv}\rangle\\
+        &=\molkern(\x_i,\x_u)\syskern(\z_{ij},\z_{uv})
+         -\molkern(\x_i,\x_v)\syskern(\z_{ij},\z_{uv})
+         -\molkern(\x_j,\x_u)\syskern(\z_{ij},\z_{uv})
+         +\molkern(\x_j,\x_v)\syskern(\z_{ij},\z_{uv})\\
+        &=\syskern(\z_{ij},\z_{uv})(\molkern(\x_i,\x_u)-\molkern(\x_i,\x_v)-\molkern(\x_j,\x_u)+\molkern(\x_j,\x_v)).
+\end{align}
+Here, $\syskern(\z_{ij},\z_{uv})$ expresses the similarity between the two chromatographic systems associated with $(i,j)$ and $(u,v)$.
+
+\subsubsection{Chromatographic System Descriptors}
+
 
 
 \newpage

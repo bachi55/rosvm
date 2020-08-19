@@ -13,3 +13,4 @@ doc/*.out
 doc/*.run.xml
 doc/*.synctex.gz
 **/*.toc
+**/.*.kate-swp
