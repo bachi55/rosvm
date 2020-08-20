@@ -31,7 +31,7 @@ from typing import Tuple
 from rosvm.ranksvm.rank_svm_cls import Labels
 
 
-def read_dataset(fn: str, sep='\t') -> Tuple[np.ndarray, Labels, np.ndarray]:
+def read_dataset(fn: str, sep='\t', sort_by_dataset=True) -> Tuple[np.ndarray, Labels, np.ndarray]:
     """
     :param fn: string, path to the dataset file.
     :param sep: character, csv-file entry separator
@@ -43,6 +43,10 @@ def read_dataset(fn: str, sep='\t') -> Tuple[np.ndarray, Labels, np.ndarray]:
     )
     """
     data = pd.read_csv(fn, sep=sep)
+
+    if sort_by_dataset:
+        data.sort_values(by="dataset", inplace=True)
+
     X = np.array(list(map(lambda x: x.split(","), data.substructure_count.values)), dtype="float")
     y = Labels(data.rt.values, data.dataset.values)
     mol = data.smiles.values
