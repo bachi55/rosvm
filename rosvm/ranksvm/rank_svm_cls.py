@@ -34,7 +34,7 @@ from sklearn.metrics.pairwise import pairwise_kernels
 from sklearn.utils.validation import check_random_state
 from sklearn.model_selection import train_test_split
 from collections.abc import Sequence
-from typing import TypeVar, Union, Dict
+from typing import TypeVar, Union, Dict, Tuple
 
 from rosvm.ranksvm.pair_utils import get_pairs_multiple_datasets
 from rosvm.ranksvm.kernel_utils import tanimoto_kernel, generalized_tanimoto_kernel
@@ -56,7 +56,6 @@ class Labels(Sequence):
         self._dss = dss
         if len(self._rts) != len(self._dss):
             raise ValueError("Number of retention times must be equal the number of the dataset identifiers.")
-        self._unique_ds = sorted(set(self._dss))
 
         self.shape = (len(self._rts),)  # needed for scikit-learn input checks
 
@@ -103,8 +102,13 @@ class Labels(Sequence):
     def get_dss(self):
         return self._dss
 
-    def get_unique_dss(self):
-        return self._unique_ds
+    def get_unique_dss(self, return_counts=False):
+        out = np.unique(self._dss, return_counts=return_counts)
+
+        if return_counts:
+            return out[0].tolist(), out[1].tolist()
+        else:
+            return out.tolist()
 
     def get_idc_for_ds(self, ds, on_missing_raise=True):
         if on_missing_raise and (ds not in set(self.get_unique_dss())):
