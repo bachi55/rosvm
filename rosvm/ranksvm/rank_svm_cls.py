@@ -81,8 +81,11 @@ class Labels(Sequence):
                 # Integer indexing
                 return Labels([self._rts[i] for i in item], [self._dss[i] for i in item])
             else:
-                raise NotImplementedError("For lists only int and bool are allowed as index type.")
+                raise ValueError("For lists only int and bool are allowed as index type.")
         elif isinstance(item, np.ndarray):
+            if np.any(item < 0):
+                raise ValueError("Only positive indices are allowed.")
+
             return self.__getitem__(item.tolist())
         else:
             raise TypeError("Label indices must integers, slices, list or numpy.ndarray, not %s." % type(item))
