@@ -26,15 +26,62 @@
 import numpy as np
 
 from collections import OrderedDict
-from rdkit.Chem.rdMolDescriptors import GetMorganFingerprint, GetMorganFingerprintAsBitVect
-from rdkit.Chem import MolFromSmiles
-from rdkit.DataStructs.cDataStructs import UIntSparseIntVect
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.utils.validation import check_is_fitted
 from scipy.sparse import dok_matrix
 
+# RDKit imports
+from rdkit.Chem.rdMolDescriptors import GetMorganFingerprint, GetMorganFingerprintAsBitVect
+from rdkit.Chem import MolFromSmiles
+from rdkit.DataStructs.cDataStructs import UIntSparseIntVect
+from rdkit.Chem.EState.Fingerprinter import FingerprintMol as EStateFingerprinter
 
-class CircularFPFeaturizer(BaseEstimator, TransformerMixin):
+
+class AbstractFeaturizer:
+    @staticmethod
+    def sanitize_mol(mol):
+        """
+        :param mol: rdkit Mol object or string, if a string is provided, it is interpreted as SMILES and an RDKit Mol
+            object is generated. Otherwise, the input is passed on.
+
+        :return: rdkit Mol object
+        """
+        if isinstance(mol, str):
+            # Convert SMILES to mol objects if strings are provided.
+            smi = mol
+            mol = MolFromSmiles(smi)
+
+            if not mol:
+                raise RuntimeError("SMILES could not be parsed: '%s'." % smi)
+
+        return mol
+
+
+class EStateIndFeaturizer(AbstractFeaturizer, BaseEstimator, TransformerMixin):
+    def __int__(self):
+        pass
+
+    def fit(self, mols, y=None, groups=None):
+        return self
+
+    def transform(self, mols):
+        if not isinstance(mols, list) and not isinstance(mols, np.ndarray):
+            raise ValueError("Input must be a list of objects.")
+
+        # Sanitize the molecule input list
+        mols = [self.sanitize_mol(mol) for mol in mols]
+
+        # Calculate the EState indices
+        idc = [EStateFingerprinter(mol)[1] for mol in mols]
+
+        # Create the output matrix
+        idc_mat = np.vstack(idc)
+        assert idc_mat.shape == (len(mols), 79)
+
+        return idc_mat
+
+
+class CircularFPFeaturizer(AbstractFeaturizer, BaseEstimator, TransformerMixin):
     def __init__(self, fp_type="ECFP", only_freq_subs=False, min_subs_freq=0.1, fp_mode="count", n_bits_folded=2048,
                  use_chirality=False, output_dense_matrix=False, max_n_bits_for_dense_output=10000, radius=2):
         """
@@ -112,12 +159,7 @@ class CircularFPFeaturizer(BaseEstimator, TransformerMixin):
 
             rdkit.DataStructs.cDataStructs.ExplicitBitVect, if fp_mode is "binary_folded"
         """
-        if isinstance(mol, str):
-            # Convert SMILES to mol objects if strings are provided.
-            smi = mol
-            mol = MolFromSmiles(smi)
-            if not mol:
-                raise RuntimeError("SMILES could not be parsed: '%s'." % smi)
+        mol = self.sanitize_mol(mol)
 
         if self.use_binary_generator_:
             fp = GetMorganFingerprintAsBitVect(mol, radius=self.radius, useChirality=self.use_chirality,
@@ -226,5 +268,5 @@ class CircularFPFeaturizer(BaseEstimator, TransformerMixin):
 
 
 if __name__ == "__main__":
-    print(CircularFPFeaturizer(only_freq_subs=False).fit_transform(
-        ["CC(=O)C1=CC2=C(OC(C)(C)[C@@H](O)[C@@H]2O)C=C1", "C1COC2=CC=CC=C2C1"] * 100))
+    print(EStateIndFeaturizer().fit_transform(
+        ["CC(=O)C1=CC2=C(OC(C)(C)[C@@H](O)[C@@H]2O)C=C1", "C1COC2=CC=CC=C2C1"] * 1))
