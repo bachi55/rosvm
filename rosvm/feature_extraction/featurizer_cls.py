@@ -59,12 +59,24 @@ class AbstractFeaturizer:
 
 class EStateIndFeaturizer(AbstractFeaturizer, BaseEstimator, TransformerMixin):
     def __int__(self):
+        """
+        EState indices featurizer.
+        """
         pass
 
     def fit(self, mols, y=None, groups=None):
+        """
+        does nothing
+        """
         return self
 
     def transform(self, mols):
+        """
+        :param mols: list of SMILES or RDKit.Mol objects, molecules for which the EState indices should be calculated.
+
+        :return: array-like, shape = (n_mol, n_estate_idc = 79), row-matrix storing the EState indices of the provided
+            molecules
+        """
         if not isinstance(mols, list) and not isinstance(mols, np.ndarray):
             raise ValueError("Input must be a list of objects.")
 
