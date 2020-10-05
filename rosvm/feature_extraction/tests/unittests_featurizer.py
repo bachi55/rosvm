@@ -33,8 +33,214 @@ from rdkit.Chem.rdMolDescriptors import GetMorganFingerprint, GetMorganFingerpri
 from scipy.sparse import isspmatrix_csr
 from sklearn.exceptions import NotFittedError
 from sklearn.base import clone
+from e3fp.pipeline import fprints_from_smiles
+from e3fp.fingerprint.fprint import mean as fp_mean
 
-from rosvm.feature_extraction.featurizer_cls import CircularFPFeaturizer
+from rosvm.feature_extraction.featurizer_cls import CircularFPFeaturizer, Circular3DFPFeaturizer
+
+
+class TestCircular3DFPFeaturizer(unittest.TestCase):
+    def setUp(self) -> None:
+        self.smis = ["CC(=O)C1=CC2=C(OC(C)(C)[C@@H](O)[C@@H]2O)C=C1",
+                     "C1COC2=CC=CC=C2C1",
+                     "CC1OC(O)C(O)C(O)C1O",
+                     "COc1cc2ccc(=O)oc2cc1O",
+                     "C=CC(C)(O)CCC1C(C)(O)CCC2C(C)(C)CCCC21C"]
+        self.n_mols = len(self.smis)
+
+    def test__train_with_frequent_substrset(self) -> None:
+        # appears on ALL molecules
+        self.assertEqual(0, len(
+            Circular3DFPFeaturizer(only_freq_subs=True, min_subs_freq=1.01, save_conformer=True).fit(self.smis)))
+
+        # All data for fit and transform
+        n_old = np.inf
+        for freq in np.arange(0, 1.1, 0.1):
+            fprinter = Circular3DFPFeaturizer(only_freq_subs=True, min_subs_freq=freq, save_conformer=True, n_jobs=4) \
+                .fit(self.smis)
+
+            # set of frequent pattern should get smaller when we require the patterns to be appear in more molecules
+            n_new = len(fprinter)
+            self.assertTrue(n_new <= n_old)
+            n_old = n_new
+
+            # Check dimension of transformed output
+            fps_mat = fprinter.transform(self.smis)
+            self.assertEqual(len(fprinter), fps_mat.shape[1])
+
+            # Check frequency of substructures in the output
+            freq_hash_set_inv = {v: k for k, v in fprinter.freq_hash_set_.items()}
+            for j in range(len(fprinter)):
+                h = freq_hash_set_inv[j]
+                self.assertTrue(np.sum(fps_mat[:, j].data > 0) / self.n_mols >= fprinter.hash_cnts_filtered_[h][1])
+
+        # Half of the data for fit and the other half for transform
+        n_old = np.inf
+        for freq in np.arange(0, 1.1, 0.1):
+            fprinter = Circular3DFPFeaturizer(only_freq_subs=True, min_subs_freq=freq, save_conformer=True, n_jobs=4) \
+                .fit(self.smis[:7])
+
+            # set of frequent pattern should get smaller when we require the patterns to be appear in more molecules
+            n_new = len(fprinter)
+            self.assertTrue(n_new <= n_old)
+            n_old = n_new
+
+            # Check dimension of transformed output
+            fps_mat = fprinter.transform(self.smis[7:])
+            self.assertEqual(len(fprinter), fps_mat.shape[1])
+
+    def test__determine_not_fitted_yet(self) -> None:
+        fprinter = Circular3DFPFeaturizer(only_freq_subs=True, save_conformer=True)
+
+        with self.assertRaises(NotFittedError):
+             len(fprinter)
+        with self.assertRaises(NotFittedError):
+            fprinter.transform(self.smis)
+
+        self.assertEqual(len(fprinter.fit(self.smis)), 183)
+
+    def test__to_dense_output(self) -> None:
+        # Output to large to be converted to a dense matrix
+        fpr_mat = Circular3DFPFeaturizer(fp_mode="binary_folded", output_dense_matrix=True, n_bits_folded=2048,
+                                         max_n_bits_for_dense_output=2048, save_conformer=True).fit_transform(self.smis)
+        self.assertFalse(isspmatrix_csr(fpr_mat))
+        self.assertTrue(isinstance(fpr_mat, np.ndarray))
+
+        # Output to large to be converted to a dense matrix
+        fpr_mat = Circular3DFPFeaturizer(fp_mode="binary_folded", output_dense_matrix=True, n_bits_folded=2048,
+                                         max_n_bits_for_dense_output=100, save_conformer=True).fit_transform(self.smis)
+        self.assertTrue(isspmatrix_csr(fpr_mat))
+        self.assertFalse(isinstance(fpr_mat, np.ndarray))
+
+        # Save-guard works for hashed fingerprints
+        fpr_mat = Circular3DFPFeaturizer(output_dense_matrix=True, save_conformer=True).fit_transform(self.smis)
+        self.assertTrue(isspmatrix_csr(fpr_mat))
+        self.assertFalse(isinstance(fpr_mat, np.ndarray))
+
+    def test__hashed_counting_fingerprints(self) -> None:
+        # COUNT HASHED
+        # ------------
+        fprintr = Circular3DFPFeaturizer(save_conformer=False, n_jobs=4, fp_mode="count", conformer_seed=102)
+        fps_mat_smi = fprintr.fit_transform(self.smis)  # using SMILES
+
+        # Output shape
+        self.assertEqual(fps_mat_smi.shape[0], self.n_mols)
+        self.assertEqual(fps_mat_smi.shape[1], fprintr.max_hash_value_)
+
+        # Fingerprint matrix structure
+        for i, smi in enumerate(self.smis):
+            fps_ref = fprints_from_smiles(smi, name=smi, confgen_params=fprintr.confgen_params_,
+                                          fprint_params=fprintr.fprint_params_)
+
+            # Use mean aggregation for count data
+            if len(fps_ref) > 1:
+                fps_ref = fp_mean(fps_ref)
+            else:
+                fps_ref = fps_ref[0]
+
+            for hash, cnt in fps_ref.counts.items():
+                self.assertEqual(fps_mat_smi[i, hash], cnt)
+
+    def test__hashed_counting_no_stereo_fingerprints(self) -> None:
+        # COUNT HASHED
+        # ------------
+        fprintr = Circular3DFPFeaturizer(save_conformer=False, n_jobs=4, fp_mode="count", conformer_seed=102,
+                                         fp_type="E3FP-NoStereo")
+        fps_mat_smi = fprintr.fit_transform(self.smis)  # using SMILES
+
+        # Output shape
+        self.assertEqual(fps_mat_smi.shape[0], self.n_mols)
+        self.assertEqual(fps_mat_smi.shape[1], fprintr.max_hash_value_)
+
+        # Fingerprint matrix structure
+        for i, smi in enumerate(self.smis):
+            fps_ref = fprints_from_smiles(smi, name=smi, confgen_params=fprintr.confgen_params_,
+                                          fprint_params=fprintr.fprint_params_)
+
+            # Use mean aggregation for count data
+            if len(fps_ref) > 1:
+                fps_ref = fp_mean(fps_ref)
+            else:
+                fps_ref = fps_ref[0]
+
+            for hash, cnt in fps_ref.counts.items():
+                self.assertEqual(fps_mat_smi[i, hash], cnt)
+
+    def test__folded_counting_fingerprints(self) -> None:
+        # COUNT FOLDED
+        # ------------
+        n_bits = 128
+        fprintr = Circular3DFPFeaturizer(save_conformer=False, n_jobs=4, fp_mode="count_folded", n_bits_folded=n_bits,
+                                         conformer_seed=102)
+        fps_mat_smi = fprintr.fit_transform(self.smis)  # using SMILES
+
+        # Output shape
+        self.assertEqual(fps_mat_smi.shape[0], self.n_mols)
+        self.assertEqual(fps_mat_smi.shape[1], n_bits)
+
+        # Fingerprint matrix structure
+        for i, smi in enumerate(self.smis):
+            fps_ref = fprints_from_smiles(smi, name=smi, confgen_params=fprintr.confgen_params_,
+                                          fprint_params=fprintr.fprint_params_)
+
+            # Use mean aggregation for count data
+            if len(fps_ref) > 1:
+                fps_ref = fp_mean(fps_ref)
+            else:
+                fps_ref = fps_ref[0]
+
+            self.assertEqual(fps_mat_smi.shape[1], len(fps_ref))
+
+            for col in range(fps_mat_smi.shape[1]):
+                cnt = fps_ref.get_count(col)
+                self.assertEqual(fps_mat_smi[i, col], cnt)
+
+    def test__hashed_binary_fingerprints(self) -> None:
+        fprintr = Circular3DFPFeaturizer(save_conformer=False, n_jobs=4, fp_mode="binary", conformer_seed=102)
+        fps_mat_smi = fprintr.fit_transform(self.smis)  # using SMILES
+
+        # Output shape
+        self.assertEqual(fps_mat_smi.shape[0], self.n_mols)
+        self.assertEqual(fps_mat_smi.shape[1], fprintr.max_hash_value_)
+
+        # Fingerprint matrix structure
+        for i, smi in enumerate(self.smis):
+            fps_ref = fprints_from_smiles(smi, name=smi, confgen_params=fprintr.confgen_params_,
+                                          fprint_params=fprintr.fprint_params_)
+
+            # Use OR aggregation for binary data
+            fp_ref = fps_ref[0]
+            for j in range(1, len(fps_ref)):
+                fp_ref = fp_ref | fps_ref[j]
+
+            for hash in fp_ref.counts.keys():
+                self.assertEqual(fps_mat_smi[i, hash], True)
+
+    def test__folded_binary_fingerprints(self) -> None:
+        n_bits = 128
+        fprintr = Circular3DFPFeaturizer(save_conformer=False, n_jobs=4, fp_mode="binary_folded", n_bits_folded=n_bits,
+                                         conformer_seed=102)
+        fps_mat_smi = fprintr.fit_transform(self.smis)  # using SMILES
+
+        # Output shape
+        self.assertEqual(fps_mat_smi.shape[0], self.n_mols)
+        self.assertEqual(fps_mat_smi.shape[1], n_bits)
+
+        # Fingerprint matrix structure
+        for i, smi in enumerate(self.smis):
+            fps_ref = fprints_from_smiles(smi, name=smi, confgen_params=fprintr.confgen_params_,
+                                          fprint_params=fprintr.fprint_params_)
+
+            # Use OR aggregation for binary data
+            fp_ref = fps_ref[0]
+            for j in range(1, len(fps_ref)):
+                fp_ref = fp_ref | fps_ref[j]
+
+            self.assertEqual(fps_mat_smi.shape[1], len(fp_ref))
+
+            for col in range(fps_mat_smi.shape[1]):
+                cnt = fp_ref.get_count(col)
+                self.assertEqual(fps_mat_smi[i, col], cnt)
 
 
 class TestCircularFPFeaturizer(unittest.TestCase):
@@ -317,7 +523,6 @@ class TestCircularFPFeaturizer(unittest.TestCase):
 
     def test__sklearn_clone(self):
         fprinter = CircularFPFeaturizer()
-
         fprinter_cloned = clone(fprinter)
 
 
