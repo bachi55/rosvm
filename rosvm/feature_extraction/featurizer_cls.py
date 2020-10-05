@@ -194,13 +194,19 @@ class Circular3DFPFeaturizer(FeaturizerMixin, BaseEstimator, TransformerMixin):
 
         return mol
 
-    def _confs_from_smiles(self, smi, name):
+    def _confs_from_smiles(self, smi, name, confgen_params=None, save=None):
+        if confgen_params is None:
+            confgen_params = self.confgen_params_
+
+        if save is None:
+            save = self.save_conformer
+
         # Load conformers if they exist, otherwise generate them
         conf_sdf_fn = os.path.join(self.conformer_directory, name + ".sdf")
         if self.save_conformer and os.path.exists(conf_sdf_fn):
             confs = self._mol_from_sdf(conf_sdf_fn, conf_num=self.max_n_conformer)
         else:
-            confs = confs_from_smiles(smi, name=name, confgen_params=self.confgen_params_, save=self.save_conformer)
+            confs = confs_from_smiles(smi, name=name, confgen_params=confgen_params, save=save)
 
         return confs
 
@@ -245,19 +251,33 @@ class Circular3DFPFeaturizer(FeaturizerMixin, BaseEstimator, TransformerMixin):
 
         return fp
 
-    def fit(self, mols, y=None, groups=None):
-        self.max_hash_value_ = 2 ** 32  # hash values are stored as unsigned int (32 bit), uint32
-
-        self.fprint_params_ = {
+    def _get_param_dicts(self):
+        fprint_params_ = {
             "stereo": self.fp_type == "E3FP",
             "counts": self.fp_mode.startswith("count"),
             "bits": self.n_bits_folded if self.fp_mode.endswith("folded") else -1
         }
-        self.confgen_params_ = {
+        confgen_params_ = {
             "first": self.max_n_conformer,
             "out_dir": self.conformer_directory,
             "seed": self.conformer_seed
         }
+
+        return fprint_params_, confgen_params_
+
+    def precompute_conformers(self, smis, n_jobs=1):
+
+        smis_unq = list(set(smis))
+        names_unq = [MolToInchiKey(MolFromSmiles(smi)) for smi in smis_unq]
+
+        _, confgen_params = self._get_param_dicts()
+
+        _ = Parallel(n_jobs=n_jobs)(delayed(self._confs_from_smiles)(smi, name, confgen_params, True)
+                                    for smi, name in zip(smis_unq, names_unq))
+
+    def fit(self, mols, y=None, groups=None):
+        self.max_hash_value_ = 2 ** 32  # hash values are stored as unsigned int (32 bit), uint32
+        self.fprint_params_, self.confgen_params_ = self._get_param_dicts()
 
         if self.fp_mode.endswith("folded"):
             self.n_bits_ = self.n_bits_folded

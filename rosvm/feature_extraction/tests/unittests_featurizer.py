@@ -51,7 +51,8 @@ class TestCircular3DFPFeaturizer(unittest.TestCase):
     def test__train_with_frequent_substrset(self) -> None:
         # appears on ALL molecules
         self.assertEqual(0, len(
-            Circular3DFPFeaturizer(only_freq_subs=True, min_subs_freq=1.01, save_conformer=True).fit(self.smis)))
+            Circular3DFPFeaturizer(only_freq_subs=True, min_subs_freq=1.01, save_conformer=True, n_jobs=4)
+                .fit(self.smis)))
 
         # All data for fit and transform
         n_old = np.inf
@@ -78,7 +79,7 @@ class TestCircular3DFPFeaturizer(unittest.TestCase):
         n_old = np.inf
         for freq in np.arange(0, 1.1, 0.1):
             fprinter = Circular3DFPFeaturizer(only_freq_subs=True, min_subs_freq=freq, save_conformer=True, n_jobs=4) \
-                .fit(self.smis[:7])
+                .fit(self.smis[:3])
 
             # set of frequent pattern should get smaller when we require the patterns to be appear in more molecules
             n_new = len(fprinter)
@@ -86,7 +87,7 @@ class TestCircular3DFPFeaturizer(unittest.TestCase):
             n_old = n_new
 
             # Check dimension of transformed output
-            fps_mat = fprinter.transform(self.smis[7:])
+            fps_mat = fprinter.transform(self.smis[3:])
             self.assertEqual(len(fprinter), fps_mat.shape[1])
 
     def test__determine_not_fitted_yet(self) -> None:
@@ -96,8 +97,6 @@ class TestCircular3DFPFeaturizer(unittest.TestCase):
              len(fprinter)
         with self.assertRaises(NotFittedError):
             fprinter.transform(self.smis)
-
-        self.assertEqual(len(fprinter.fit(self.smis)), 183)
 
     def test__to_dense_output(self) -> None:
         # Output to large to be converted to a dense matrix
