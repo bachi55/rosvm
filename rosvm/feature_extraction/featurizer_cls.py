@@ -349,7 +349,7 @@ class EStateIndFeaturizer(FeaturizerMixin, BaseEstimator, TransformerMixin):
         """
         pass
 
-    def fit(self, mols, y=None, groups=None):
+    def fit(self, mols=None, y=None, groups=None):
         """
         Nothing to fit here.
         """
