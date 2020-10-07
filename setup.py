@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="rosvm",
-    version="0.3.1",
+    version="0.4.0",
     license="MIT",
     packages=find_packages(exclude=["results*", "tests", "examples", "*.ipynb", "run_*.py"]),
 
@@ -13,6 +13,7 @@ setup(
         "pandas",
         "scipy",
         "joblib",
+        "e3fp"
     ],
 
     # Metadata

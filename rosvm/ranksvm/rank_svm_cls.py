@@ -589,7 +589,7 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
         # Calculate the kernel
         if self.kernel == "tanimoto":
             K_XY = tanimoto_kernel(X, Y, shallow_input_check=True)
-        elif self.kernel == "minmax":
+        elif self.kernel in ["minmax", "generalized_tanimoto"]:
             K_XY = generalized_tanimoto_kernel(X, Y, shallow_input_check=True)
         else:
             K_XY = pairwise_kernels(X, Y, metric=self.kernel, filter_params=True, n_jobs=n_jobs, **params)
