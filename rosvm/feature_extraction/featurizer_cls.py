@@ -89,9 +89,9 @@ class FeaturizerMixin(object):
         hash_cnts = OrderedDict()
         for d in dicts:
             for h in d:
-                if h in hash_cnts:
+                try:
                     hash_cnts[h] += 1
-                else:
+                except KeyError:
                     hash_cnts[h] = 1
 
         # Filter the hashes according to the required minimum frequency
