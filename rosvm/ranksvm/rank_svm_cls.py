@@ -32,9 +32,9 @@ import itertools
 from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.metrics.pairwise import pairwise_kernels
 from sklearn.utils.validation import check_random_state
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, BaseCrossValidator, GridSearchCV
 from collections.abc import Sequence
-from typing import TypeVar, Union, Dict
+from typing import TypeVar, Union, Dict, Optional, List
 
 from rosvm.ranksvm.pair_utils import get_pairs_multiple_datasets
 from rosvm.ranksvm.kernel_utils import tanimoto_kernel, generalized_tanimoto_kernel
@@ -145,7 +145,7 @@ class FeasibilityError(RuntimeError):
         super(FeasibilityError, self).__init__(msg)
 
 
-class KernelRankSVC (BaseEstimator, ClassifierMixin):
+class KernelRankSVC(BaseEstimator, ClassifierMixin):
     """
     Implementation of the kernelized Ranking Support Vector Classifier.
 
@@ -995,6 +995,25 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
             tp /= n_decisions
 
         return tp, n_decisions
+
+
+class LeaveOutKernelRankSVC(BaseEstimator, ClassifierMixin):
+    def __init__(self, cv_outer, cv_inner, ranksvm_params=None, hyper_params=None):
+        self.cv_outer = cv_outer  # type: BaseCrossValidator
+        self.cv_inner = cv_inner  # type: BaseCrossValidator
+        self.ranksvm_params = ranksvm_params
+        self.hyper_params = hyper_params
+
+    def fit(self, X: np.ndarray, y: Labels, groups: Optional[List[str]] = None):
+        ranksvms = []
+        for train, test in self.cv_outer.split(X, y, groups=groups):
+            X_train = X[train]
+            y_train = y[train]
+            groups_train = groups[train] if groups else None
+
+            gcv = GridSearchCV(estimator=KernelRankSVC(**self.ranksvm_params), param_grid=self.hyper_params,
+                               cv=self.cv_inner).fit(X_train, y_train, groups_train)
+            ranksvms.append(gcv.best_estimator_)
 
 
 def runtime(X, y, mol, n_rep=7, pairwise_features="difference"):
