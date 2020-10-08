@@ -30,6 +30,7 @@ import scipy.sparse as sp_sparse
 import itertools
 
 from sklearn.base import BaseEstimator, ClassifierMixin
+from sklearn.base import clone as sk_clone
 from sklearn.metrics.pairwise import pairwise_kernels
 from sklearn.utils.validation import check_random_state
 from sklearn.model_selection import train_test_split, BaseCrossValidator, GridSearchCV
@@ -998,22 +999,87 @@ class KernelRankSVC(BaseEstimator, ClassifierMixin):
 
 
 class LeaveOutKernelRankSVC(BaseEstimator, ClassifierMixin):
-    def __init__(self, cv_outer, cv_inner, ranksvm_params=None, hyper_params=None):
-        self.cv_outer = cv_outer  # type: BaseCrossValidator
-        self.cv_inner = cv_inner  # type: BaseCrossValidator
-        self.ranksvm_params = ranksvm_params
-        self.hyper_params = hyper_params
+    def __init__(self, cv, estimator):
+        """
 
-    def fit(self, X: np.ndarray, y: Labels, groups: Optional[List[str]] = None):
-        ranksvms = []
-        for train, test in self.cv_outer.split(X, y, groups=groups):
+        """
+        self.cv = cv  # type: BaseCrossValidator
+        # TODO: I assume we need to restrict the cross-validation splitter here, e.g. to ensure non-overlapping groups.
+
+        self.base_estimator = estimator  # type: Union[GridSearchCV, KernelRankSVC]
+        if not (isinstance(self.base_estimator, GridSearchCV) or isinstance(self.base_estimator, KernelRankSVC)):
+            raise ValueError("Invalid estimator instance '%s'. Choices are 'GridSearchCV' and 'KernelRankSVM'" %
+                             type(self.base_estimator))
+
+    def fit(self, X: np.ndarray, y: Labels, groups: List[str]):
+        """
+
+        """
+        self.estimator_map_ = {}
+        self.estimators_ = []
+
+        # Train the estimators in a cross-validation fashion ...
+        #   leave some of the training data out, based on the group
+        # ---------------------------------------------------------
+        for est_idx, (train, test) in enumerate(self.cv.split(X, y, groups=groups)):
+            # Clone the base estimator
+            estimator = sk_clone(self.base_estimator)
+
+            # Subset training data
             X_train = X[train]
             y_train = y[train]
-            groups_train = groups[train] if groups else None
+            groups_train = groups[train]
 
-            gcv = GridSearchCV(estimator=KernelRankSVC(**self.ranksvm_params), param_grid=self.hyper_params,
-                               cv=self.cv_inner).fit(X_train, y_train, groups_train)
-            ranksvms.append(gcv.best_estimator_)
+            # Fit the base estimator
+            estimator.fit(X_train, y_train, groups=groups_train)
+
+            # Handle different estimator types
+            if isinstance(estimator, GridSearchCV):
+                estimator = estimator.best_estimator_
+
+            # Add the estimator to the list of estimator
+            # TODO: Do we need to make a copy of the estimator to prevent overwriting it in the next iteration?
+            self.estimators_.append(estimator)
+
+            # Update the mapping between groups and estimator in which this particular groups are missing (current one)
+            # WARN: Here we assume non-overlapping group-splits.
+            self.estimator_map_.update({grp: est_idx for grp in groups[test]})
+
+        # Train the estimator using all available data ...
+        #   for the case that we make predictions for examples outside the training set
+        # -----------------------------------------------------------------------------
+        estimator = sk_clone(self.base_estimator).fit(X, y, groups=groups)
+
+        # Handle different estimator types
+        if isinstance(estimator, GridSearchCV):
+            estimator = estimator.best_estimator_
+
+        # Add the estimator to the list of estimator
+        # TODO: Do we need to make a copy of the estimator to prevent overwriting it in the next iteration?
+        self.estimators_.append(estimator)
+
+        return self
+
+    def predict_pointwise(self, X: np.ndarray, groups: List[str]):
+        """
+
+        """
+        # Determine the estimator to use for each input
+        est_idc = np.full(len(X), fill_value=np.nan)
+        for idx, grp in enumerate(groups):
+            try:
+                est_idc[idx] = self.estimator_map_[grp]
+            except KeyError:
+                est_idc[idx] = (len(self.estimators_) - 1)  # The last estimator was trained with all data
+
+        # Perform predictions
+        # FIXME : We have the problem that the preference scores predicted with the different estimators are _not_
+        # FIXME : necessarily comparable, e.g. due to different regularization parameters. The problem is, the RankSVMs
+        # FIXME : lacks a joint target-space. Such a target space could be the retention time, e.g. by calibrating
+        # FIXME : the preference scores to retention times.
+        y_pred = np.full(len(X), fill_value=np.nan)
+        for est_idx in range(len(self.estimators_)):
+            y_pred[est_idc == est_idc] = self.estimators_.predict_pointwise(X[est_idc == est_idx])
 
 
 def runtime(X, y, mol, n_rep=7, pairwise_features="difference"):
