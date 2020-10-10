@@ -49,11 +49,18 @@ class Labels(Sequence):
     """
     def __init__(self, rts, dss):
         """
-        :param rts: list of scalars, retention times
-        :param dss: list of identifiers, dataset identifier, can be strings, integers
+        :param rts: list of scalars, list of retention times (RTs)
+        :param dss: string or list of strings, A String is interpreted as dataset identifier for all RTs. If a list of
+            strings is provided, each string is interpreted as the dataset identifier of the corresponding RT in the
+            RT list.
         """
         self._rts = rts
-        self._dss = dss
+
+        if isinstance(dss, str):
+            self._dss = [dss for _ in range(len(self._rts))]
+        else:
+            self._dss = dss
+
         if len(self._rts) != len(self._dss):
             raise ValueError("Number of retention times must be equal the number of the dataset identifiers.")
 
