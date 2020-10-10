@@ -512,7 +512,8 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
 
         return Y_pred
 
-    def score(self, X, y, sample_weight=None, return_score_per_dataset=False, X_is_kernel_input=False) \
+    def score(self, X, y, sample_weight=None, return_score_per_dataset=False, X_is_kernel_input=False,
+              min_samples_per_ds=5) \
             -> Union[float, Dict]:
         """
         :param X: array-like, tutorial description
@@ -537,6 +538,10 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
         :param X_is_kernel_input: boolean, indicating the input X should be interpreted as kernel matrix. This 
             overwrites the class parameter 'kernel'.
 
+        :param min_samples_per_ds: scalar, minimum number of samples associated with a particular dataset identifier
+            to compute score. If not enough samples provided, the score for this dataset is NaN. Score is ignored
+            during averaging.
+
         :return:
             scalar, pairwise prediction accuracy separately calculated for all provided
                 datasets and subsequently averaged.
@@ -557,20 +562,32 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
 
         scores = {}
         for ds in set(dss):  # get unique datasets
-            # Calculate the score for each dataset individually
-            Y = np.sign(rts[dss == ds][:, np.newaxis] - rts[dss == ds][np.newaxis, :])
-            Y_pred = self.predict(X[dss == ds], X_is_kernel_input=X_is_kernel_input, return_margin=False)
-            scr, ntp = self.score_pairwise_using_prediction(Y, Y_pred)
-            scores[ds] = [scr, np.sum(dss == ds).item(), ntp]
+            n_samples_ds = np.sum(dss == ds).item()
+
+            if n_samples_ds >= min_samples_per_ds:
+                # Calculate the score for each dataset individually
+                Y = np.sign(rts[dss == ds][:, np.newaxis] - rts[dss == ds][np.newaxis, :])
+                Y_pred = self.predict(X[dss == ds], X_is_kernel_input=X_is_kernel_input, return_margin=False)
+                scr, ntp = self.score_pairwise_using_prediction(Y, Y_pred)
+                scores[ds] = [scr, n_samples_ds, ntp]
+            else:
+                scores[ds] = [np.nan, n_samples_ds, np.nan]
 
         if return_score_per_dataset:
             out = scores
         else:
             # Average the score across all datasets
             out = 0.0
+            den = 0
             for val in scores.values():
-                out += val[0]
-            out /= len(scores)
+                if not np.isnan(val[0]):
+                    out += val[0]
+                    den += 1
+
+            if den == 0:
+                raise RuntimeError("No datasets reaches the minimum number of samples (%d)." % min_samples_per_ds)
+
+            out /= den
 
         return out
 
