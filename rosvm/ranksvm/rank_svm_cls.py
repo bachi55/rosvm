@@ -250,6 +250,9 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
         self.random_state = random_state
         self.debug = debug
 
+        # Added the _pairwise property allows to use the precomputed kernel matrices also for sklearn's GridSearchCV
+        self._pairwise = True if self.kernel == "precomputed" else False
+
         # Model parameters
         #   self.pairs_train_ = None
         #   self.X_train_ = None
