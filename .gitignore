@@ -15,3 +15,4 @@ doc/*.synctex.gz
 **/*.toc
 **/.*.kate-swp
 **/*.conformers
+conda/.env

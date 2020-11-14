@@ -1,0 +1,12 @@
+name: rosvm
+channels:
+  - conda-forge
+dependencies:
+  - numpy
+  - scikit-learn
+  - pandas
+  - scipy
+  - joblib
+  - cvxpy
+  - rdkit
+  - ipykernel
