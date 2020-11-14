@@ -13,6 +13,7 @@ setup(
         "pandas",
         "scipy",
         "joblib",
+	"cvxopt"
     ],
 
     # Metadata
