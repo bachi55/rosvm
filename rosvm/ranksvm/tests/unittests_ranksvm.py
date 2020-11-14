@@ -296,7 +296,6 @@ class TestVectorizedPairwiseScoringFunction(unittest.TestCase):
         self.assertEqual(perf, 0.5)
 
 
-
 class TestDualGradients(unittest.TestCase):
     def test_exterior_features(self):
         """

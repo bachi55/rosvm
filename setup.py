@@ -13,7 +13,6 @@ setup(
         "pandas",
         "scipy",
         "joblib",
-        "e3fp"
     ],
 
     # Metadata
