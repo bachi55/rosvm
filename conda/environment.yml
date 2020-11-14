@@ -9,4 +9,4 @@ dependencies:
   - joblib
   - cvxpy
   - rdkit
-  - ipykernel
+  - pip

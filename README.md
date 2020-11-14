@@ -2,7 +2,48 @@
 
 ROSVM is a [Ranking Support Vector Machine (RankSVM)](https://en.wikipedia.org/wiki/Ranking_SVM) implementation for retention order prediction of liquid chromatography (LC) retention times (RT). It was initally proposed by [Bach et al. (2018)](https://academic.oup.com/bioinformatics/article/34/17/i875/5093227). 
 
-This library aims to be a more self-containt implementation, alowing the user to easily train models and make predictions. 
+This library aims to be a more self-contained implementation, allowing the user to easily train models and make predictions. 
+
+# Install
+
+## Using conda in a new environment
+
+1) Create a new conda environment using:
+    ```bash
+    conda env create --file conda/environment.yml
+    ```
+
+2) Active the environment:
+    ```bash
+    conda activate rosvm
+    ```
+   
+3) Install the package into the environment:
+    ```bash
+    pip install . 
+    ```
+
+4) (optional) Use the environment in Jupyter notebooks to run [the examples](rosvm/ranksvm/tutorial):
+    1) Install the IPython kernel:
+    
+        ```bash
+        conda install ipykernel
+        ```
+
+    2) Make the environment available as notebook kernel:
+    
+        ```bash
+        python -m ipykernel install --user --name=rosvm
+        ```
+
+## Using pip
+
+You can install the package directly using:
+```bash
+pip install . 
+```
+However, the installation of [rdkit](https://github.com/rdkit/rdkit) can be a bit tricky. You can find installation instructions for various operating systems [here](https://github.com/rdkit/rdkit/blob/master/Docs/Book/Install.md).  
+
 
 
 # Citation

@@ -13,7 +13,8 @@ setup(
         "pandas",
         "scipy",
         "joblib",
-        "cvxpy"
+        "cvxpy",
+        "rdkit"
     ],
 
     # Metadata
