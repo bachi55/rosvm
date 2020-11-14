@@ -28,7 +28,7 @@ import numpy as np
 import scipy.sparse as sp
 import itertools as it
 
-from sklearn.metrics.pairwise import manhattan_distances
+from sklearn.metrics.pairwise import pairwise_distances
 from joblib import delayed, Parallel
 
 """
@@ -220,7 +220,7 @@ def tanimoto_kernel(X, Y=None, shallow_input_check=False):
     return K_tan
 
 
-def generalized_tanimoto_kernel(X, Y=None, shallow_input_check=False):
+def generalized_tanimoto_kernel(X, Y=None, shallow_input_check=False, n_jobs=1):
     """
     Generalized tanimoto kernel function
 
@@ -236,7 +236,7 @@ def generalized_tanimoto_kernel(X, Y=None, shallow_input_check=False):
     XL1 = np.sum(np.abs(X), axis=1)[:, np.newaxis]
     YL1 = np.sum(np.abs(Y), axis=1)[:, np.newaxis]
 
-    XmYL1 = manhattan_distances(X, Y)
+    XmYL1 = pairwise_distances(X, Y, metric="manhattan", n_jobs=n_jobs)
 
     K_gtan = (XL1 + YL1.T - XmYL1) / (XL1 + YL1.T + XmYL1)
 
