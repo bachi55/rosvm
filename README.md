@@ -8,7 +8,7 @@ This library aims to be a more self-contained implementation, allowing the user 
 
 ## Using conda in a new environment
 
-1) Create a new conda environment using:
+1) Create a new [conda](https://docs.conda.io/en/latest/miniconda.html) environment using:
     ```bash
     conda env create --file conda/environment.yml
     ```
