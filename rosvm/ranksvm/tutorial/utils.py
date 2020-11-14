@@ -31,9 +31,10 @@ from typing import Tuple
 from rosvm.ranksvm.rank_svm_cls import Labels
 
 
-def read_dataset(fn: str) -> Tuple[np.ndarray, Labels, np.ndarray]:
+def read_dataset(fn: str, sep='\t', sort_by_dataset=True) -> Tuple[np.ndarray, Labels, np.ndarray]:
     """
     :param fn: string, path to the dataset file.
+    :param sep: character, csv-file entry separator
 
     :return: tuple (
         X: array-like, shape = (n_samples, n_features), feature representation of the molecules in the dataset
@@ -41,7 +42,11 @@ def read_dataset(fn: str) -> Tuple[np.ndarray, Labels, np.ndarray]:
         mol: array-like, shape = (n_samples, ), string representation of each molecule, e.g. SMILES
     )
     """
-    data = pd.read_csv(fn, sep="\t")
+    data = pd.read_csv(fn, sep=sep)
+
+    if sort_by_dataset:
+        data.sort_values(by="dataset", inplace=True)
+
     X = np.array(list(map(lambda x: x.split(","), data.substructure_count.values)), dtype="float")
     y = Labels(data.rt.values, data.dataset.values)
     mol = data.smiles.values

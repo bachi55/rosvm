@@ -34,7 +34,7 @@ from sklearn.metrics.pairwise import pairwise_kernels
 from sklearn.utils.validation import check_random_state
 from sklearn.model_selection import train_test_split
 from collections.abc import Sequence
-from typing import TypeVar, Union, Dict
+from typing import TypeVar, Union, Dict, Tuple
 
 from rosvm.ranksvm.pair_utils import get_pairs_multiple_datasets
 from rosvm.ranksvm.kernel_utils import tanimoto_kernel, generalized_tanimoto_kernel
@@ -49,14 +49,20 @@ class Labels(Sequence):
     """
     def __init__(self, rts, dss):
         """
-        :param rts: list of scalars, retention times
-        :param dss: list of identifiers, dataset identifier, can be strings, integers
+        :param rts: list of scalars, list of retention times (RTs)
+        :param dss: string or list of strings, A String is interpreted as dataset identifier for all RTs. If a list of
+            strings is provided, each string is interpreted as the dataset identifier of the corresponding RT in the
+            RT list.
         """
         self._rts = rts
-        self._dss = dss
+
+        if isinstance(dss, str):
+            self._dss = [dss for _ in range(len(self._rts))]
+        else:
+            self._dss = dss
+
         if len(self._rts) != len(self._dss):
             raise ValueError("Number of retention times must be equal the number of the dataset identifiers.")
-        self._unique_ds = sorted(set(self._dss))
 
         self.shape = (len(self._rts),)  # needed for scikit-learn input checks
 
@@ -82,8 +88,11 @@ class Labels(Sequence):
                 # Integer indexing
                 return Labels([self._rts[i] for i in item], [self._dss[i] for i in item])
             else:
-                raise NotImplementedError("For lists only int and bool are allowed as index type.")
+                raise ValueError("For lists only int and bool are allowed as index type.")
         elif isinstance(item, np.ndarray):
+            if np.any(item < 0):
+                raise ValueError("Only positive indices are allowed.")
+
             return self.__getitem__(item.tolist())
         else:
             raise TypeError("Label indices must integers, slices, list or numpy.ndarray, not %s." % type(item))
@@ -103,8 +112,13 @@ class Labels(Sequence):
     def get_dss(self):
         return self._dss
 
-    def get_unique_dss(self):
-        return self._unique_ds
+    def get_unique_dss(self, return_counts=False):
+        out = np.unique(self._dss, return_counts=return_counts)
+
+        if return_counts:
+            return out[0].tolist(), out[1].tolist()
+        else:
+            return out.tolist()
 
     def get_idc_for_ds(self, ds, on_missing_raise=True):
         if on_missing_raise and (ds not in set(self.get_unique_dss())):
@@ -235,6 +249,9 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
         # Debug parameters
         self.random_state = random_state
         self.debug = debug
+
+        # Added the _pairwise property allows to use the precomputed kernel matrices also for sklearn's GridSearchCV
+        self._pairwise = True if self.kernel == "precomputed" else False
 
         # Model parameters
         #   self.pairs_train_ = None
@@ -495,7 +512,8 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
 
         return Y_pred
 
-    def score(self, X, y, sample_weight=None, return_score_per_dataset=False, X_is_kernel_input=False) \
+    def score(self, X, y, sample_weight=None, return_score_per_dataset=False, X_is_kernel_input=False,
+              min_samples_per_ds=5) \
             -> Union[float, Dict]:
         """
         :param X: array-like, tutorial description
@@ -520,6 +538,10 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
         :param X_is_kernel_input: boolean, indicating the input X should be interpreted as kernel matrix. This 
             overwrites the class parameter 'kernel'.
 
+        :param min_samples_per_ds: scalar, minimum number of samples associated with a particular dataset identifier
+            to compute score. If not enough samples provided, the score for this dataset is NaN. Score is ignored
+            during averaging.
+
         :return:
             scalar, pairwise prediction accuracy separately calculated for all provided
                 datasets and subsequently averaged.
@@ -540,20 +562,32 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
 
         scores = {}
         for ds in set(dss):  # get unique datasets
-            # Calculate the score for each dataset individually
-            Y = np.sign(rts[dss == ds][:, np.newaxis] - rts[dss == ds][np.newaxis, :])
-            Y_pred = self.predict(X[dss == ds], X_is_kernel_input=X_is_kernel_input, return_margin=False)
-            scr, ntp = self.score_pairwise_using_prediction(Y, Y_pred)
-            scores[ds] = [scr, np.sum(dss == ds).item(), ntp]
+            n_samples_ds = np.sum(dss == ds).item()
+
+            if n_samples_ds >= min_samples_per_ds:
+                # Calculate the score for each dataset individually
+                Y = np.sign(rts[dss == ds][:, np.newaxis] - rts[dss == ds][np.newaxis, :])
+                Y_pred = self.predict(X[dss == ds], X_is_kernel_input=X_is_kernel_input, return_margin=False)
+                scr, ntp = self.score_pairwise_using_prediction(Y, Y_pred)
+                scores[ds] = [scr, n_samples_ds, ntp]
+            else:
+                scores[ds] = [np.nan, n_samples_ds, np.nan]
 
         if return_score_per_dataset:
             out = scores
         else:
             # Average the score across all datasets
             out = 0.0
+            den = 0
             for val in scores.values():
-                out += val[0]
-            out /= len(scores)
+                if not np.isnan(val[0]):
+                    out += val[0]
+                    den += 1
+
+            if den == 0:
+                raise RuntimeError("No datasets reaches the minimum number of samples (%d)." % min_samples_per_ds)
+
+            out /= den
 
         return out
 

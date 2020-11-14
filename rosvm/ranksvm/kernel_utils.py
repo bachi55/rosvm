@@ -245,7 +245,7 @@ def generalized_tanimoto_kernel(X, Y=None, shallow_input_check=False):
 
 if __name__ == "__main__":
     import timeit
-    from featurizer_cls import CircularFPFeaturizer
+    from rosvm.feature_extraction.featurizer_cls import CircularFPFeaturizer
 
     # Performance evaluation of MinMax kernel calculation for sparse matrices returned by the featurizer
     smis = ["CC(=O)C1=CC2=C(OC(C)(C)[C@@H](O)[C@@H]2O)C=C1",
