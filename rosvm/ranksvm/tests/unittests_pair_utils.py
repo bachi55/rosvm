@@ -28,8 +28,8 @@ import unittest
 import numpy as np
 
 # Import function to test
-from ranksvm.pair_utils import get_pairs_multiple_datasets_SLOW, get_pairs_multiple_datasets
-from ranksvm.rank_svm_cls import Labels
+from rosvm.ranksvm.pair_utils import get_pairs_multiple_datasets_SLOW, get_pairs_multiple_datasets
+from rosvm.ranksvm.rank_svm_cls import Labels
 
 
 class TestPairGenerationSLOW(unittest.TestCase):
