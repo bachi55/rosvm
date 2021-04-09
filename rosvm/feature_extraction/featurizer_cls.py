@@ -33,7 +33,7 @@ from joblib.parallel import Parallel, delayed
 
 # RDKit imports
 from rdkit.Chem.rdMolDescriptors import GetMorganFingerprint, GetMorganFingerprintAsBitVect
-from rdkit.Chem import MolFromSmiles
+from rdkit.Chem import MolFromSmiles, SanitizeFlags, SanitizeMol
 from rdkit.DataStructs.cDataStructs import UIntSparseIntVect
 from rdkit.Chem.EState.Fingerprinter import FingerprintMol as EStateFingerprinter
 
@@ -50,10 +50,13 @@ class FeaturizerMixin(object):
         return self.n_bits_
 
     @staticmethod
-    def sanitize_mol(mol):
+    def sanitize_mol(mol, try_to_handle_explicit_valence_errors=True):
         """
         :param mol: rdkit Mol object or string, if a string is provided, it is interpreted as SMILES and an RDKit Mol
             object is generated. Otherwise, the input is passed on.
+
+        :param try_to_handle_explicit_valence_errors: boolean, indicating whether explicit-valence errors should be tried
+            to be handled using an RDKit workaround.
 
         :return: rdkit Mol object
         """
@@ -63,7 +66,32 @@ class FeaturizerMixin(object):
             mol = MolFromSmiles(smi)
 
             if not mol:
-                raise RuntimeError("SMILES could not be parsed: '%s'." % smi)
+                if not try_to_handle_explicit_valence_errors:
+                    raise RuntimeError("SMILES could not be parsed: '%s'." % smi)
+
+                # Sometimes "explicit-valence-error" prevents proper parsing of the molecule, in this case we can try
+                # some workaround.
+
+                # Approach taking from th RDKit cookbook:
+                # http://rdkit.org/docs/Cookbook.html#explicit-valence-error-partial-sanitization
+                mol = MolFromSmiles(smi, sanitize=False)
+                if not mol:
+                    raise RuntimeError("SMILES could not be parsed: '%s'." % smi)
+
+                mol.UpdatePropertyCache(strict=False)
+                san_ret = SanitizeMol(
+                    mol,
+                    SanitizeFlags.SANITIZE_FINDRADICALS |
+                    SanitizeFlags.SANITIZE_KEKULIZE |
+                    SanitizeFlags.SANITIZE_SETAROMATICITY |
+                    SanitizeFlags.SANITIZE_SETCONJUGATION |
+                    SanitizeFlags.SANITIZE_SETHYBRIDIZATION |
+                    SanitizeFlags.SANITIZE_SYMMRINGS,
+                    catchErrors=True
+                )
+
+                if san_ret != SanitizeFlags.SANITIZE_NONE:
+                    raise RuntimeError("SMILES could not be parsed: '%s'." % smi)
 
         return mol
 
@@ -92,11 +120,14 @@ class FeaturizerMixin(object):
 
 
 class EStateIndFeaturizer(FeaturizerMixin, BaseEstimator, TransformerMixin):
-    def __int__(self):
+    def __init__(self, try_to_handle_explicit_valence_errors=True):
         """
         EState indices featurizer.
+
+        :param try_to_handle_explicit_valence_errors: boolean, indicating whether explicit-valence errors should be tried
+            to be handled using an RDKit workaround.
         """
-        pass
+        self.try_to_handle_explicit_valence_errors = try_to_handle_explicit_valence_errors
 
     def fit(self, mols=None, y=None, groups=None):
         """
@@ -116,7 +147,7 @@ class EStateIndFeaturizer(FeaturizerMixin, BaseEstimator, TransformerMixin):
             raise ValueError("Input must be a list of objects.")
 
         # Sanitize the molecule input list
-        mols = [self.sanitize_mol(mol) for mol in mols]
+        mols = [self.sanitize_mol(mol, self.try_to_handle_explicit_valence_errors) for mol in mols]
 
         # Calculate the EState indices
         idc = [EStateFingerprinter(mol)[1] for mol in mols]
@@ -130,7 +161,8 @@ class EStateIndFeaturizer(FeaturizerMixin, BaseEstimator, TransformerMixin):
 
 class CircularFPFeaturizer(FeaturizerMixin, BaseEstimator, TransformerMixin):
     def __init__(self, fp_type="ECFP", only_freq_subs=False, min_subs_freq=0.1, fp_mode="count", n_bits_folded=2048,
-                 use_chirality=False, output_dense_matrix=False, max_n_bits_for_dense_output=10000, radius=2):
+                 use_chirality=False, output_dense_matrix=False, max_n_bits_for_dense_output=10000, radius=2,
+                 try_to_handle_explicit_valence_errors=True):
         """
         Circular Fingerprint featurizer calculates ECFP or FCFP fingerprints from molecular structures.
 
@@ -162,6 +194,8 @@ class CircularFPFeaturizer(FeaturizerMixin, BaseEstimator, TransformerMixin):
             fingerprint bits would be larger 10000 (see "max_n_bits_for_dense_output").
         :param max_n_bits_for_dense_output: scalar, maximum number of bits allowed to convert output to a dense matrix.
             This parameter is used to override "return_dense_matrix" at run-time.
+        :param try_to_handle_explicit_valence_errors: boolean, indicating whether explicit-valence errors should be tried
+            to be handled using an RDKit workaround.
         """
         self.fp_type = fp_type
         if self.fp_type not in ["ECFP", "FCFP"]:
@@ -181,6 +215,7 @@ class CircularFPFeaturizer(FeaturizerMixin, BaseEstimator, TransformerMixin):
         self.output_dense_matrix = output_dense_matrix
         self.max_n_bits_for_dense_output = max_n_bits_for_dense_output
         self.radius = radius
+        self.try_to_handle_explicit_valence_errors = try_to_handle_explicit_valence_errors
 
     def _get_fingerprints(self, mols):
         if not isinstance(mols, list) and not isinstance(mols, np.ndarray):
@@ -206,7 +241,7 @@ class CircularFPFeaturizer(FeaturizerMixin, BaseEstimator, TransformerMixin):
 
             rdkit.DataStructs.cDataStructs.ExplicitBitVect, if fp_mode is "binary_folded"
         """
-        mol = self.sanitize_mol(mol)
+        mol = self.sanitize_mol(mol, self.try_to_handle_explicit_valence_errors)
 
         if self.use_binary_generator_:
             fp = GetMorganFingerprintAsBitVect(mol, radius=self.radius, useChirality=self.use_chirality,
