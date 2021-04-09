@@ -34,7 +34,42 @@ from scipy.sparse import isspmatrix_csr
 from sklearn.exceptions import NotFittedError
 from sklearn.base import clone
 
-from rosvm.feature_extraction.featurizer_cls import CircularFPFeaturizer
+from rosvm.feature_extraction.featurizer_cls import CircularFPFeaturizer, EStateIndFeaturizer
+
+
+class TestEStateIndFeaturizer(unittest.TestCase):
+    def setUp(self) -> None:
+        self.smis = ["CC(=O)C1=CC2=C(OC(C)(C)[C@@H](O)[C@@H]2O)C=C1",
+                     "C1COC2=CC=CC=C2C1",
+                     "O=C(CCc1ccc(O)cc1)c1c(O)cc(O)c(C2OC(CO)C(O)C(O)C2O)c1O",
+                     "O=c1c(OC2OC(CO)C(O)C(O)C2O)c(-c2ccc(OC3OC(CO)C(O)C(O)C3O)c(O)c2)oc2cc(O)cc(O)c12",
+                     "O=C(O)C1OC(Oc2c(-c3ccc(O)c(O)c3)oc3cc(O)cc(O)c3c2=O)C(O)C(O)C1O",
+                     "Oc1cc(O)c2c(c1)OC1(c3ccc(O)c(O)c3)Oc3cc(O)c4c(c3C2C1O)OC(c1ccc(O)c(O)c1)C(O)C4",
+                     "COc1cc(O)c2c(=O)c(O)c(-c3ccc(O)c(O)c3)oc2c1",
+                     "CC1OC(O)C(O)C(O)C1O",
+                     "Cc1cc2nc3c(O)nc(=O)nc-3n(CC(O)C(O)C(O)CO)c2cc1C",
+                     "O=C(C=Cc1ccc(O)c(O)c1)OC(Cc1ccc(O)c(O)c1)C(=O)O",
+                     "COc1cc(O)c2c(c1)OC(c1ccc(O)cc1)CC2=O",
+                     "C=CC(C)(O)CCC1C(C)(O)CCC2C(C)(C)CCCC21C",
+                     "COc1cc2ccc(=O)oc2cc1O",
+                     "NCCc1c[nH]c2ccc(O)cc12"]
+        self.mols = [MolFromSmiles(smi) for smi in self.smis]
+        self.n_mols = len(self.mols)
+
+    def test__fingerprinter(self):
+        fps_from_smis = EStateIndFeaturizer().fit_transform(self.smis)
+        fps_from_mols = EStateIndFeaturizer().fit_transform(self.mols)
+
+        self.assertEqual((self.n_mols, 79), fps_from_smis.shape)
+        self.assertEqual((self.n_mols, 79), fps_from_mols.shape)
+        np.testing.assert_equal(fps_from_smis, fps_from_mols)
+
+    def test__parallel_fingerprinter(self):
+        fps_from_sgl = EStateIndFeaturizer(n_jobs=1).fit_transform(self.smis)
+        fps_from_par = EStateIndFeaturizer(n_jobs=4).fit_transform(self.smis)
+
+        self.assertEqual((self.n_mols, 79), fps_from_par.shape)
+        np.testing.assert_equal(fps_from_sgl, fps_from_par)
 
 
 class TestCircularFPFeaturizer(unittest.TestCase):
@@ -317,7 +352,16 @@ class TestCircularFPFeaturizer(unittest.TestCase):
 
     def test__sklearn_clone(self):
         fprinter = CircularFPFeaturizer()
-        fprinter_cloned = clone(fprinter)
+        _ = clone(fprinter)
+
+    def test__parallel_fingerprinter(self):
+        fps_from_sgl = \
+            CircularFPFeaturizer(n_jobs=1, fp_mode="binary_folded", output_dense_matrix=True).fit_transform(self.smis)
+        fps_from_par = \
+            CircularFPFeaturizer(n_jobs=4, fp_mode="binary_folded", output_dense_matrix=True).fit_transform(self.smis)
+
+        self.assertEqual((self.n_mols, 2048), fps_from_par.shape)
+        np.testing.assert_equal(fps_from_sgl, fps_from_par)
 
 
 if __name__ == '__main__':

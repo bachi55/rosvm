@@ -28,7 +28,7 @@ import numpy as np
 from collections import OrderedDict
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.utils.validation import check_is_fitted
-from scipy.sparse import dok_matrix
+from scipy.sparse import dok_matrix, coo_matrix, lil_matrix, issparse
 from joblib.parallel import Parallel, delayed
 
 # RDKit imports
@@ -39,6 +39,12 @@ from rdkit.Chem.EState.Fingerprinter import FingerprintMol as EStateFingerprinte
 
 
 class FeaturizerMixin(object):
+    def __init__(self, n_jobs=1):
+        """
+        :param n_jobs: scalar, number of parallel jobs used to compute the fingerprints.
+        """
+        self.n_jobs = n_jobs
+
     def get_length(self):
         return self.__len__()
 
@@ -48,6 +54,21 @@ class FeaturizerMixin(object):
                             "molecular training structures.")
 
         return self.n_bits_
+
+    def _get_fingerprints(self, mols):
+        if not isinstance(mols, list) and not isinstance(mols, np.ndarray):
+            raise ValueError("Input must be a list or array-like object.")
+
+        # Calculate the fingerprints
+        fps = Parallel(n_jobs=self.n_jobs, backend="multiprocessing")(
+            delayed(self._get_fingerprint)(mol) for mol in mols
+        )
+        assert len(fps) == len(mols)
+
+        return fps
+
+    def _get_fingerprint(self, mol):
+        raise NotImplemented("Needs to be implemented in sub-class.")
 
     @staticmethod
     def sanitize_mol(mol, try_to_handle_explicit_valence_errors=True):
@@ -120,14 +141,17 @@ class FeaturizerMixin(object):
 
 
 class EStateIndFeaturizer(FeaturizerMixin, BaseEstimator, TransformerMixin):
-    def __init__(self, try_to_handle_explicit_valence_errors=True):
+    def __init__(self, try_to_handle_explicit_valence_errors=True, n_jobs=1):
         """
         EState indices featurizer.
 
         :param try_to_handle_explicit_valence_errors: boolean, indicating whether explicit-valence errors should be tried
             to be handled using an RDKit workaround.
+        :param n_jobs: scalar, number of parallel jobs used to compute the fingerprints.
         """
         self.try_to_handle_explicit_valence_errors = try_to_handle_explicit_valence_errors
+
+        super().__init__(n_jobs)
 
     def fit(self, mols=None, y=None, groups=None):
         """
@@ -143,14 +167,8 @@ class EStateIndFeaturizer(FeaturizerMixin, BaseEstimator, TransformerMixin):
         :return: array-like, shape = (n_mol, n_estate_idc = 79), row-matrix storing the EState indices of the provided
             molecules
         """
-        if not isinstance(mols, list) and not isinstance(mols, np.ndarray):
-            raise ValueError("Input must be a list of objects.")
-
-        # Sanitize the molecule input list
-        mols = [self.sanitize_mol(mol, self.try_to_handle_explicit_valence_errors) for mol in mols]
-
         # Calculate the EState indices
-        idc = [EStateFingerprinter(mol)[1] for mol in mols]
+        idc = self._get_fingerprints(mols)
 
         # Create the output matrix
         idc_mat = np.vstack(idc)
@@ -158,11 +176,17 @@ class EStateIndFeaturizer(FeaturizerMixin, BaseEstimator, TransformerMixin):
 
         return idc_mat
 
+    def _get_fingerprint(self, mol):
+        """
+
+        """
+        return EStateFingerprinter(self.sanitize_mol(mol, self.try_to_handle_explicit_valence_errors))[1]
+
 
 class CircularFPFeaturizer(FeaturizerMixin, BaseEstimator, TransformerMixin):
     def __init__(self, fp_type="ECFP", only_freq_subs=False, min_subs_freq=0.1, fp_mode="count", n_bits_folded=2048,
                  use_chirality=False, output_dense_matrix=False, max_n_bits_for_dense_output=10000, radius=2,
-                 try_to_handle_explicit_valence_errors=True):
+                 try_to_handle_explicit_valence_errors=True, n_jobs=1):
         """
         Circular Fingerprint featurizer calculates ECFP or FCFP fingerprints from molecular structures.
 
@@ -196,6 +220,7 @@ class CircularFPFeaturizer(FeaturizerMixin, BaseEstimator, TransformerMixin):
             This parameter is used to override "return_dense_matrix" at run-time.
         :param try_to_handle_explicit_valence_errors: boolean, indicating whether explicit-valence errors should be tried
             to be handled using an RDKit workaround.
+        :param n_jobs: scalar, number of parallel jobs used to compute the fingerprints.
         """
         self.fp_type = fp_type
         if self.fp_type not in ["ECFP", "FCFP"]:
@@ -217,15 +242,7 @@ class CircularFPFeaturizer(FeaturizerMixin, BaseEstimator, TransformerMixin):
         self.radius = radius
         self.try_to_handle_explicit_valence_errors = try_to_handle_explicit_valence_errors
 
-    def _get_fingerprints(self, mols):
-        if not isinstance(mols, list) and not isinstance(mols, np.ndarray):
-            raise ValueError("Input must be a list of objects.")
-
-        # Calculate the fingerprints
-        fps = [self._get_fingerprint(mol) for mol in mols]
-        assert len(fps) == len(mols)
-
-        return fps
+        super().__init__(n_jobs)
 
     def _get_fingerprint(self, mol):
         """
@@ -298,28 +315,45 @@ class CircularFPFeaturizer(FeaturizerMixin, BaseEstimator, TransformerMixin):
         fps = self._get_fingerprints(mols)
 
         # Construct sparse matrix from fingerprints
-        dtype = np.uint16 if self.fp_mode == "count" else np.bool
-        fps_mat = dok_matrix((len(mols), self.n_bits_), dtype=dtype)
+        if self.output_dense_matrix and (self.n_bits_ <= self.max_n_bits_for_dense_output):
+            fp_mat_generator = np.zeros
+        else:
+            fp_mat_generator = lil_matrix
+        fps_mat = fp_mat_generator(
+            (len(mols), self.n_bits_), dtype=(np.uint16 if self.fp_mode == "count" else np.bool)
+        )
+
         if self.fp_mode == "binary_folded":
             for i, fp in enumerate(fps):
                 fps_mat[i, list(fp.GetOnBits())] = True
         else:
-            for i, fp in enumerate(fps):
-                for hash, cnt in fp.GetNonzeroElements().items():
-                    if self.only_freq_subs:
-                        if hash in self.freq_hash_set_:
-                            fps_mat[i, self.freq_hash_set_[hash]] = cnt
-                    else:
-                        fps_mat[i, hash] = cnt
+            if self.only_freq_subs:
+                for i, fp in enumerate(fps):
+                    for key, cnt in fp.GetNonzeroElements().items():
+                        try:
+                            fps_mat[i, self.freq_hash_set_[key]] = cnt
+                        except KeyError:
+                            pass
+            else:
+                for i, fp in enumerate(fps):
+                    keys, cnts = map(list, zip(*fp.GetNonzeroElements().items()))
+                    fps_mat[i, keys] = cnts
 
-        if self.output_dense_matrix and (self.n_bits_ <= self.max_n_bits_for_dense_output):
-            fps_mat = fps_mat.toarray()
-        else:
+        if issparse(fps_mat):
             fps_mat = fps_mat.tocsr()
 
         return fps_mat
 
 
 if __name__ == "__main__":
-    print(EStateIndFeaturizer().fit_transform(
-        ["CC(=O)C1=CC2=C(OC(C)(C)[C@@H](O)[C@@H]2O)C=C1", "C1COC2=CC=CC=C2C1"] * 1))
+    import time
+
+    s = time.time()
+    CircularFPFeaturizer(n_jobs=1, output_dense_matrix=True, fp_mode="count", only_freq_subs=True).fit_transform(
+        ["CC(=O)C1=CC2=C(OC(C)(C)[C@@H](O)[C@@H]2O)C=C1", "C1COC2=CC=CC=C2C1"] * 50000)
+    print("Single: %.3fs" % (time.time() - s))
+
+    s = time.time()
+    CircularFPFeaturizer(n_jobs=4, output_dense_matrix=True, fp_mode="count", only_freq_subs=True).fit_transform(
+        ["CC(=O)C1=CC2=C(OC(C)(C)[C@@H](O)[C@@H]2O)C=C1", "C1COC2=CC=CC=C2C1"] * 50000)
+    print("Single: %.3fs" % (time.time() - s))
