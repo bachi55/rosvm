@@ -131,7 +131,11 @@ class FeaturizerMixin(object):
         hash_idc = OrderedDict()  # stores (key, value) pairs: key=fp-hash, value=index-in-fp-matrix
         i = 0
         for h, cnt in hash_cnts.items():
-            freq = cnt / len(dicts)
+            if isinstance(min_freq, int):
+                freq = cnt
+            else:  # float
+                freq = cnt / len(dicts)
+
             if freq >= min_freq:
                 hash_cnts_filtered[h] = (cnt, freq)
                 hash_idc[h] = i
@@ -195,9 +199,10 @@ class CircularFPFeaturizer(FeaturizerMixin, BaseEstimator, TransformerMixin):
             learned on the molecule set passed to 'fit'. If True, the transform function only returns fingerprints that
             are frequent on the training set. Otherwise, molecule set passed to 'fit' are ignored. The minimum frequency
             of a sub-structure to be used can be specified using 'min_subs_freq'.
-        :param min_subs_freq: scalar, from range [0, 1] specifying the required frequency of a sub-structure appearing
+        :param min_subs_freq: scalar, if float it specifies the required frequency of a sub-structure appearing
             in the training set (passed to 'fit') to be included in the final fingerprint. E.g. a value of 0.1 means,
-            that a sub-structure needs to appear in at least 10% of the training molecules.
+            that a sub-structure needs to appear in at least 10% of the training molecules. If it is an integer, then
+            it represents the minimum number of occurrences of a sub-structure.
         :param fp_mode: string, specifying whether "count", "binary" or "binary_folded" fingerprints should be
             calculated.
                 "count": Return counts of all frequent sub-structures

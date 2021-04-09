@@ -1,5 +1,9 @@
 # Changelog
 
+## Version 0.3.4
+- allow specification of minimum occurrences of sub-substructures in the circular fingerprints as integer (minimum 
+  number)
+
 ## Version 0.3.3
 
 ### Parallel Fingerprint Computation

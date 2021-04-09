@@ -166,6 +166,65 @@ class TestCircularFPFeaturizer(unittest.TestCase):
         self.assertEqual(CircularFPFeaturizer._count_and_filter_hashes({}, 0.5)[1], OrderedDict())
         self.assertEqual(CircularFPFeaturizer._count_and_filter_hashes({}, 1)[1], OrderedDict())
 
+    def test__count_and_filter_hashes__with_ints(self) -> None:
+        d = [
+            {"A": 0, "B": 0, "C": 0, "D": 0},
+            {"A": 0 ,        "C": 0, "D": 0},
+            {        "B": 0, "C": 0, "D": 0},
+            {        "B": 0, "C": 0, "D": 0},
+            {        "B": 0, "C": 0, "D": 0},
+            {        "B": 0, "C": 0, "D": 0},
+            {"A": 0, "B": 0, "C": 0, "D": 0},
+            {                        "D": 0}
+        ]  # A = 3 / 8, B = 6 / 8 and C = 7 / 8
+
+        # Must appear in at least 1 time --> result should contain all keys
+        self.assertEqual(len(CircularFPFeaturizer._count_and_filter_hashes(d, 1)[0]), 4)
+        self.assertEqual(CircularFPFeaturizer._count_and_filter_hashes(d, 1)[0]["A"], 0)
+        self.assertEqual(CircularFPFeaturizer._count_and_filter_hashes(d, 1)[0]["B"], 1)
+        self.assertEqual(CircularFPFeaturizer._count_and_filter_hashes(d, 1)[0]["C"], 2)
+        self.assertEqual(CircularFPFeaturizer._count_and_filter_hashes(d, 1)[0]["D"], 3)
+
+        self.assertEqual(len(CircularFPFeaturizer._count_and_filter_hashes(d, 2)[0]), 4)
+        self.assertEqual(CircularFPFeaturizer._count_and_filter_hashes(d, 2)[0].keys(), {"A", "B", "C", "D"})
+        self.assertEqual(CircularFPFeaturizer._count_and_filter_hashes(d, 2)[0]["A"], 0)
+        self.assertEqual(CircularFPFeaturizer._count_and_filter_hashes(d, 2)[0]["B"], 1)
+        self.assertEqual(CircularFPFeaturizer._count_and_filter_hashes(d, 2)[0]["C"], 2)
+        self.assertEqual(CircularFPFeaturizer._count_and_filter_hashes(d, 2)[0]["D"], 3)
+
+        self.assertEqual(len(CircularFPFeaturizer._count_and_filter_hashes(d, 3)[0]), 4)
+        self.assertEqual(CircularFPFeaturizer._count_and_filter_hashes(d, 3)[0].keys(), {"A", "B", "C", "D"})
+        self.assertEqual(CircularFPFeaturizer._count_and_filter_hashes(d, 3)[0]["A"], 0)
+        self.assertEqual(CircularFPFeaturizer._count_and_filter_hashes(d, 3)[0]["B"], 1)
+        self.assertEqual(CircularFPFeaturizer._count_and_filter_hashes(d, 3)[0]["C"], 2)
+        self.assertEqual(CircularFPFeaturizer._count_and_filter_hashes(d, 3)[0]["D"], 3)
+
+        self.assertEqual(len(CircularFPFeaturizer._count_and_filter_hashes(d, 4)[0]), 3)
+        self.assertEqual(CircularFPFeaturizer._count_and_filter_hashes(d, 4)[0].keys(), {"B", "C", "D"})
+        self.assertEqual(CircularFPFeaturizer._count_and_filter_hashes(d, 4)[0]["B"], 0)
+        self.assertEqual(CircularFPFeaturizer._count_and_filter_hashes(d, 4)[0]["C"], 1)
+        self.assertEqual(CircularFPFeaturizer._count_and_filter_hashes(d, 4)[0]["D"], 2)
+
+        self.assertEqual(len(CircularFPFeaturizer._count_and_filter_hashes(d, 7)[0]), 2)
+        self.assertEqual(CircularFPFeaturizer._count_and_filter_hashes(d, 7)[0].keys(), {"C", "D"})
+        self.assertEqual(CircularFPFeaturizer._count_and_filter_hashes(d, 7)[0]["C"], 0)
+        self.assertEqual(CircularFPFeaturizer._count_and_filter_hashes(d, 7)[0]["D"], 1)
+
+    def test__count_and_filter_hashes__ints_vs_floats(self):
+        d = [
+            {"A": 0, "B": 0, "C": 0, "D": 0},
+            {"A": 0 ,        "C": 0, "D": 0},
+            {        "B": 0, "C": 0, "D": 0},
+            {        "B": 0, "C": 0, "D": 0},
+            {        "B": 0, "C": 0, "D": 0},
+            {        "B": 0, "C": 0, "D": 0},
+            {"A": 0, "B": 0, "C": 0, "D": 0},
+            {                        "D": 0}
+        ]  # A = 3 / 8, B = 6 / 8 and C = 7 / 8
+
+        self.assertEqual(len(CircularFPFeaturizer._count_and_filter_hashes(d, 1)[0]), 4)
+        self.assertEqual(len(CircularFPFeaturizer._count_and_filter_hashes(d, 1.0)[0]), 1)
+
     def test__train_with_frequent_substrset(self) -> None:
         # appears on ALL molecules
         self.assertEqual(len(CircularFPFeaturizer(only_freq_subs=True, min_subs_freq=1).fit(self.mols)), 0)
