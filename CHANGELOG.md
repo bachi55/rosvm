@@ -1,5 +1,12 @@
 # Changelog
 
+## Version 0.3.3
+
+### Parallel Fingerprint Computation
+- Joblib is used to compute the fingerprints of multiple molecules in parallel 
+- Joblib uses the 'multiprocessing' backend to make it work
+- Small performance improvements in the feature transformation function
+
 ## Version 0.3.2
 
 ### Improved SMILES handling

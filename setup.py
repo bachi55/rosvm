@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="rosvm",
-    version="0.3.2",
+    version="0.3.3",
     license="MIT",
     packages=find_packages(exclude=["results*", "tests", "examples", "*.ipynb", "run_*.py"]),
 
