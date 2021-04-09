@@ -232,8 +232,12 @@ class CircularFPFeaturizer(FeaturizerMixin, BaseEstimator, TransformerMixin):
             raise ValueError("Invalid fingerprint type: '%s'. Choices are 'ECFP' and 'FCFP'.")
 
         self.min_subs_freq = min_subs_freq
-        if self.min_subs_freq < 0 or self.min_subs_freq > 1:
-            raise ValueError("Sub-structure frequency invalid: '%f'. Must be from range [0, 1].")
+        if (isinstance(self.min_subs_freq, int) and self.min_subs_freq < 0) \
+                or (isinstance(self.min_subs_freq, float) and (self.min_subs_freq < 0 or self.min_subs_freq >= 1)):
+            raise ValueError(
+                "Sub-structure frequency invalid: '{}'. Must be either a float from range [0, 1) or an integer >= 0."
+                .format(self.min_subs_freq)
+            )
 
         self.fp_mode = fp_mode
         if self.fp_mode not in ["count", "binary", "binary_folded"]:
