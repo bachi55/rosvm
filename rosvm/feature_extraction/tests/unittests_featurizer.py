@@ -329,6 +329,19 @@ class TestCircularFPFeaturizer(unittest.TestCase):
             for hash, cnt in fps_ref.GetNonzeroElements().items():
                 self.assertEqual(fp_i_from_str[hash], cnt)
 
+    def test__string_output_format__only_freq_subs(self) -> None:
+        fprintr = CircularFPFeaturizer(output_format="sparse_string", only_freq_subs=True)
+
+        fps_str = fprintr.fit_transform(self.smis)  # using SMILES
+
+        # Output shape
+        self.assertEqual(self.n_mols, len(fps_str))
+
+        # Fingerprint matrix structure
+        for i, mol in enumerate(self.mols):
+            for k in eval("{" + fps_str[i] + "}"):
+                self.assertTrue(0 <= k < len(fprintr))
+
     def test__string_output_format__binary(self) -> None:
         fprintr = CircularFPFeaturizer(output_format="sparse_string", fp_mode="binary_folded")
 

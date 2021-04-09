@@ -322,13 +322,14 @@ class CircularFPFeaturizer(FeaturizerMixin, BaseEstimator, TransformerMixin):
         return ",".join(map(str, fp.GetOnBits()))
 
     def _fp2str__unfolded_freq_hash_set(self, fp):
-        fp_str = ",".join([
-            "%d:%d" % (k, v)
-            for k, v in fp.GetNonzeroElements().items()
-            if k in self.freq_hash_set_
-        ])
+        fp_str = []
+        for k, v in fp.GetNonzeroElements().items():
+            try:
+                fp_str.append("%d:%d" % (self.freq_hash_set_[k], v))
+            except KeyError:
+                pass
 
-        return fp_str
+        return ",".join(fp_str)
 
     def _fp2str__unfolded(self, fp):
         fp_str = ",".join([
