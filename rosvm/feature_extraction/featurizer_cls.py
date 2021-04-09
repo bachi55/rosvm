@@ -28,7 +28,7 @@ import numpy as np
 from collections import OrderedDict
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.utils.validation import check_is_fitted
-from scipy.sparse import dok_matrix, coo_matrix, lil_matrix, issparse
+from scipy.sparse import lil_matrix, issparse
 from joblib.parallel import Parallel, delayed
 
 # RDKit imports
@@ -189,7 +189,7 @@ class EStateIndFeaturizer(FeaturizerMixin, BaseEstimator, TransformerMixin):
 
 class CircularFPFeaturizer(FeaturizerMixin, BaseEstimator, TransformerMixin):
     def __init__(self, fp_type="ECFP", only_freq_subs=False, min_subs_freq=0.1, fp_mode="count", n_bits_folded=2048,
-                 use_chirality=False, output_dense_matrix=False, max_n_bits_for_dense_output=10000, radius=2,
+                 use_chirality=False, output_format="sparse", max_n_bits_for_dense_output=10000, radius=2,
                  try_to_handle_explicit_valence_errors=True, n_jobs=1):
         """
         Circular Fingerprint featurizer calculates ECFP or FCFP fingerprints from molecular structures.
@@ -215,7 +215,7 @@ class CircularFPFeaturizer(FeaturizerMixin, BaseEstimator, TransformerMixin):
             'fp_type="binary_folded"'.
         :param use_chirality: boolean, indicating whether chirality information should be added to the generated
             fingerprint
-        :param output_dense_matrix: boolean, indicating whether the returned fingerprint matrix should be dense.
+        :param output_format: boolean, indicating whether the returned fingerprint matrix should be dense.
             If False, the returned matrix will be of type "scipy.sparse.csr_matrix". This parameter should be used with
             caution. When hashed fingerprints are used, e.g. counting ECFP, than the output matrix dimension is
             (n_molecules, 2 ** 32), so huge! However, when frequent sub-sets are used, than the output dimension could
@@ -233,9 +233,9 @@ class CircularFPFeaturizer(FeaturizerMixin, BaseEstimator, TransformerMixin):
 
         self.min_subs_freq = min_subs_freq
         if (isinstance(self.min_subs_freq, int) and self.min_subs_freq < 0) \
-                or (isinstance(self.min_subs_freq, float) and (self.min_subs_freq < 0 or self.min_subs_freq >= 1)):
+                or (isinstance(self.min_subs_freq, float) and (self.min_subs_freq < 0 or self.min_subs_freq > 1)):
             raise ValueError(
-                "Sub-structure frequency invalid: '{}'. Must be either a float from range [0, 1) or an integer >= 0."
+                "Sub-structure frequency invalid: '{}'. Must be either a float from range [0, 1] or an integer >= 0."
                 .format(self.min_subs_freq)
             )
 
@@ -246,7 +246,11 @@ class CircularFPFeaturizer(FeaturizerMixin, BaseEstimator, TransformerMixin):
         self.only_freq_subs = only_freq_subs
         self.n_bits_folded = n_bits_folded
         self.use_chirality = use_chirality
-        self.output_dense_matrix = output_dense_matrix
+
+        self.output_format = output_format
+        if self.output_format not in ["sparse_string", "sparse", "dense"]:
+            raise ValueError("Invalid output format: '%s'. Choices are 'sparse_string', 'sparse' and 'dense'.")
+
         self.max_n_bits_for_dense_output = max_n_bits_for_dense_output
         self.radius = radius
         self.try_to_handle_explicit_valence_errors = try_to_handle_explicit_valence_errors
@@ -314,6 +318,25 @@ class CircularFPFeaturizer(FeaturizerMixin, BaseEstimator, TransformerMixin):
 
         return self
 
+    def _fp2str__binary_folded(self, fp):
+        return ",".join(map(str, fp.GetOnBits()))
+
+    def _fp2str__unfolded_freq_hash_set(self, fp):
+        fp_str = ",".join([
+            "%d:%d" % (k, v)
+            for k, v in fp.GetNonzeroElements().items()
+            if k in self.freq_hash_set_
+        ])
+
+        return fp_str
+
+    def _fp2str__unfolded(self, fp):
+        fp_str = ",".join([
+            "%d:%d" % (k, v)
+            for k, v in fp.GetNonzeroElements().items()
+        ])
+        return fp_str
+
     def transform(self, mols):
         if self.only_freq_subs:
             check_is_fitted(self, ["n_bits_", "freq_hash_set_", "hash_cnts_filtered_"],
@@ -323,11 +346,25 @@ class CircularFPFeaturizer(FeaturizerMixin, BaseEstimator, TransformerMixin):
         # Calculate fingerprints for the molecules
         fps = self._get_fingerprints(mols)
 
+        if self.output_format == "sparse_string":
+            with Parallel(n_jobs=self.n_jobs, backend="multiprocessing") as parallel:
+
+                if self.fp_mode == "binary_folded":
+                    fps = parallel(delayed(self._fp2str__binary_folded)(fp) for fp in fps)
+                else:
+                    if self.only_freq_subs:
+                        fps = parallel(delayed(self._fp2str__unfolded_freq_hash_set)(fp) for fp in fps)
+                    else:
+                        fps = parallel(delayed(self._fp2str__unfolded)(fp) for fp in fps)
+
+            return fps
+
         # Construct sparse matrix from fingerprints
-        if self.output_dense_matrix and (self.n_bits_ <= self.max_n_bits_for_dense_output):
+        if self.output_format == "dense" and (self.n_bits_ <= self.max_n_bits_for_dense_output):
             fp_mat_generator = np.zeros
         else:
             fp_mat_generator = lil_matrix
+
         fps_mat = fp_mat_generator(
             (len(mols), self.n_bits_), dtype=(np.uint16 if self.fp_mode == "count" else np.bool)
         )
@@ -358,11 +395,11 @@ if __name__ == "__main__":
     import time
 
     s = time.time()
-    CircularFPFeaturizer(n_jobs=1, output_dense_matrix=True, fp_mode="count", only_freq_subs=True).fit_transform(
+    CircularFPFeaturizer(n_jobs=1, output_format="sparse", fp_mode="count", only_freq_subs=True).fit_transform(
         ["CC(=O)C1=CC2=C(OC(C)(C)[C@@H](O)[C@@H]2O)C=C1", "C1COC2=CC=CC=C2C1"] * 50000)
     print("Single: %.3fs" % (time.time() - s))
 
     s = time.time()
-    CircularFPFeaturizer(n_jobs=4, output_dense_matrix=True, fp_mode="count", only_freq_subs=True).fit_transform(
+    CircularFPFeaturizer(n_jobs=4, output_format="sparse", fp_mode="count", only_freq_subs=True).fit_transform(
         ["CC(=O)C1=CC2=C(OC(C)(C)[C@@H](O)[C@@H]2O)C=C1", "C1COC2=CC=CC=C2C1"] * 50000)
     print("Single: %.3fs" % (time.time() - s))

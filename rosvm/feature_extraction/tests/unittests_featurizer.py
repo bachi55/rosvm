@@ -227,7 +227,7 @@ class TestCircularFPFeaturizer(unittest.TestCase):
 
     def test__train_with_frequent_substrset(self) -> None:
         # appears on ALL molecules
-        self.assertEqual(len(CircularFPFeaturizer(only_freq_subs=True, min_subs_freq=1).fit(self.mols)), 0)
+        self.assertEqual(len(CircularFPFeaturizer(only_freq_subs=True, min_subs_freq=1.0).fit(self.mols)), 0)
 
         # All data for fit and transform
         n_old = np.inf
@@ -275,19 +275,19 @@ class TestCircularFPFeaturizer(unittest.TestCase):
 
     def test__to_dense_output(self) -> None:
         # Output to large to be converted to a dense matrix
-        fpr_mat = CircularFPFeaturizer(fp_mode="binary_folded", output_dense_matrix=True, n_bits_folded=2048,
+        fpr_mat = CircularFPFeaturizer(fp_mode="binary_folded", output_format="dense", n_bits_folded=2048,
                                        max_n_bits_for_dense_output=2048).fit_transform(self.mols)
         self.assertFalse(isspmatrix_csr(fpr_mat))
         self.assertTrue(isinstance(fpr_mat, np.ndarray))
 
         # Output to large to be converted to a dense matrix
-        fpr_mat = CircularFPFeaturizer(fp_mode="binary_folded", output_dense_matrix=True, n_bits_folded=2048,
+        fpr_mat = CircularFPFeaturizer(fp_mode="binary_folded", output_format="dense", n_bits_folded=2048,
                                        max_n_bits_for_dense_output=100).fit_transform(self.mols)
         self.assertTrue(isspmatrix_csr(fpr_mat))
         self.assertFalse(isinstance(fpr_mat, np.ndarray))
 
         # Save-guard works for hashed fingerprints
-        fpr_mat = CircularFPFeaturizer(output_dense_matrix=True).fit_transform(self.mols)
+        fpr_mat = CircularFPFeaturizer(output_format="dense").fit_transform(self.mols)
         self.assertTrue(isspmatrix_csr(fpr_mat))
         self.assertFalse(isinstance(fpr_mat, np.ndarray))
 
@@ -310,6 +310,44 @@ class TestCircularFPFeaturizer(unittest.TestCase):
             for hash, cnt in fps_ref.GetNonzeroElements().items():
                 self.assertEqual(fps_mat_smi[i, hash], cnt)
                 self.assertEqual(fps_mat_mol[i, hash], cnt)
+
+    def test__string_output_format(self) -> None:
+        fprintr = CircularFPFeaturizer(output_format="sparse_string")
+
+        fps_str = fprintr.fit_transform(self.smis)  # using SMILES
+
+        # Output shape
+        self.assertEqual(self.n_mols, len(fps_str))
+
+        # Fingerprint matrix structure
+        for i, mol in enumerate(self.mols):
+            fps_ref = GetMorganFingerprint(mol, radius=fprintr.radius, useFeatures=fprintr.use_features_,
+                                           useChirality=fprintr.use_chirality, useCounts=fprintr.use_counts_)
+
+            fp_i_from_str = eval("{" + fps_str[i] + "}")
+
+            for hash, cnt in fps_ref.GetNonzeroElements().items():
+                self.assertEqual(fp_i_from_str[hash], cnt)
+
+    def test__string_output_format__binary(self) -> None:
+        fprintr = CircularFPFeaturizer(output_format="sparse_string", fp_mode="binary_folded")
+
+        fps_str = fprintr.fit_transform(self.smis)  # using SMILES
+
+        # Output shape
+        self.assertEqual(self.n_mols, len(fps_str))
+
+        # Fingerprint matrix structure
+        for i, mol in enumerate(self.mols):
+            fps_ref = GetMorganFingerprintAsBitVect(
+                mol, radius=fprintr.radius, useFeatures=fprintr.use_features_, useChirality=fprintr.use_chirality,
+                nBits=fprintr.n_bits_
+            )
+
+            fp_i_from_str = eval("{" + fps_str[i] + "}")
+
+            for idx in fps_ref.GetOnBits():
+                self.assertIn(idx, fp_i_from_str)
 
     def test__hashed_counting_fingerprints__fcfp(self) -> None:
         fprintr = CircularFPFeaturizer(fp_type="FCFP")
@@ -415,9 +453,9 @@ class TestCircularFPFeaturizer(unittest.TestCase):
 
     def test__parallel_fingerprinter(self):
         fps_from_sgl = \
-            CircularFPFeaturizer(n_jobs=1, fp_mode="binary_folded", output_dense_matrix=True).fit_transform(self.smis)
+            CircularFPFeaturizer(n_jobs=1, fp_mode="binary_folded", output_format="dense").fit_transform(self.smis)
         fps_from_par = \
-            CircularFPFeaturizer(n_jobs=4, fp_mode="binary_folded", output_dense_matrix=True).fit_transform(self.smis)
+            CircularFPFeaturizer(n_jobs=4, fp_mode="binary_folded", output_format="dense").fit_transform(self.smis)
 
         self.assertEqual((self.n_mols, 2048), fps_from_par.shape)
         np.testing.assert_equal(fps_from_sgl, fps_from_par)

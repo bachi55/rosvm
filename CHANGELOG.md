@@ -3,6 +3,7 @@
 ## Version 0.3.4
 - allow specification of minimum occurrences of sub-substructures in the circular fingerprints as integer (minimum 
   number)
+- add support for sparse fingerprint string outputs for the circular fingerprinter  
 
 ## Version 0.3.3
 
