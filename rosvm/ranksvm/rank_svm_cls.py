@@ -211,7 +211,7 @@ class KernelRankSVC (BaseEstimator, ClassifierMixin):
     SOURCE: http://scikit-learn.org/stable/modules/classes.html#module-sklearn.metrics.pairwise
     """
     def __init__(self, C=1.0, kernel="precomputed", max_iter=500, gamma=None, coef0=1, degree=3, kernel_params=None,
-                 random_state=None, pair_generation="random", alpha_threshold=1e-2, pairwise_features="difference",
+                 random_state=None, pair_generation="random", alpha_threshold=1e-5, pairwise_features="difference",
                  debug=False, step_size="linesearch", duality_gap_threshold=1e-4,
                  conv_criteria="rel_duality_gap_decay"):
 
