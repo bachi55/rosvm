@@ -50,6 +50,8 @@ However, the installation of [rdkit](https://github.com/rdkit/rdkit) can be a bi
 
 If you are using the library please cite: 
 
+- For the general approach of retention order prediction 
+
 ```bibtex
 @article{Bach2018,
     author = {Bach, Eric and Szedmak, Sandor and Brouard, Céline and Böcker, Sebastian and Rousu, Juho},
@@ -64,5 +66,18 @@ If you are using the library please cite:
     doi = {10.1093/bioinformatics/bty590},
     url = {https://doi.org/10.1093/bioinformatics/bty590},
     eprint = {https://academic.oup.com/bioinformatics/article-pdf/34/17/i875/25702364/bty590.pdf},
+}
+```
+
+- For the actual ROSVM implementation 
+
+```bibtex
+@software{Bach_Retention_Order_Support_2020,
+    author = {Bach, Eric},
+    month = {5},
+    title = {{Retention Order Support Vector Machine (ROSVM)}},
+    url = {https://github.com/bachi55/rosvm},
+    version = {0.4.0},
+    year = {2020}
 }
 ```
