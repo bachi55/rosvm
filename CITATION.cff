@@ -7,5 +7,5 @@ authors:
   affiliation: Aalto University, Espoo, Finland 
 title: "Retention Order Support Vector Machine (ROSVM)"
 version: 0.4.0
-date-released: 2020-05-07
+date-released: 2021-11-10
 url: "https://github.com/bachi55/rosvm"
