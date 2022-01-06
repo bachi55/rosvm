@@ -1,5 +1,10 @@
 # Changelog
 
+## Version 0.5.0
+
+- clean up conda environment file and require scikit-learn (>= 0.24)
+- KernelRankSVC class now supports the "pairwise" property via estimator tags
+
 ## Version 0.4.0
 
 - add code to estimate the parameters for the platt-probabilty estimate
@@ -30,3 +35,5 @@
 - improved convergence of the RankSVM by using line-search and early stopping criteria
 
 ## Version 0.2.0
+
+- initial release

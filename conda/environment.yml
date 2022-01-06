@@ -2,11 +2,10 @@ name: rosvm
 channels:
   - conda-forge
 dependencies:
-  - numpy
-  - scikit-learn
-  - pandas
-  - scipy
-  - joblib
-  - cvxpy
-  - rdkit
-  - pip
+  - conda-forge::numpy
+  - conda-forge::scikit-learn>=0.24
+  - conda-forge::pandas
+  - conda-forge::scipy
+  - conda-forge::joblib
+  - conda-forge::cvxpy
+  - conda-forge::rdkit
