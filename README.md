@@ -69,7 +69,7 @@ If you are using the library please cite:
 }
 ```
 
-- For the actual ROSVM implementation 
+- For the actual ROSVM implementation: 
 
 ```bibtex
 @software{Bach_Retention_Order_Support_2020,
@@ -77,7 +77,7 @@ If you are using the library please cite:
     month = {5},
     title = {{Retention Order Support Vector Machine (ROSVM)}},
     url = {https://github.com/bachi55/rosvm},
-    version = {0.4.0},
+    version = {0.5.0},
     year = {2020}
 }
 ```
