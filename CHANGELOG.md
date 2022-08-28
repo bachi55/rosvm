@@ -1,5 +1,9 @@
 # Changelog
 
+## Version 0.5.0
+
+- add citation information and zenodo badge
+
 ## Version 0.4.0
 
 - add code to estimate the parameters for the platt-probabilty estimate
